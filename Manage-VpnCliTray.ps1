@@ -1033,7 +1033,13 @@ function Invoke-VpnCliTrayManager {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
         throw "$($script:ProductName) can be managed only on Windows."
     }
-    Assert-ProcessNotElevated
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedVersion) -and $RequestedVersion -cnotmatch '^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+        throw "Invalid release version: $RequestedVersion"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedPublisherThumbprint) -and $ExpectedPublisherThumbprint -notmatch '^[A-Fa-f0-9]{40}$|^[A-Fa-f0-9]{64}$') {
+        throw 'Publisher thumbprint must contain exactly 40 or 64 hexadecimal characters.'
+    }
 
     $resolvedAction = $RequestedAction
     if ($resolvedAction -ceq 'Menu') {
@@ -1043,15 +1049,12 @@ function Invoke-VpnCliTrayManager {
         Write-Host 'No changes were made.'
         return
     }
+
+    Assert-ProcessNotElevated
+
     if ($resolvedAction -ceq 'Status') {
         Show-InstallationStatus
         return
-    }
-    if (-not [string]::IsNullOrWhiteSpace($RequestedVersion) -and $RequestedVersion -cnotmatch '^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
-        throw "Invalid release version: $RequestedVersion"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($ExpectedPublisherThumbprint) -and $ExpectedPublisherThumbprint -notmatch '^[A-Fa-f0-9]{40}$|^[A-Fa-f0-9]{64}$') {
-        throw 'Publisher thumbprint must contain exactly 40 or 64 hexadecimal characters.'
     }
 
     $releaseRoot = Get-ReleaseRootUri `

@@ -87,14 +87,54 @@ Assert-Throws -Because 'custom release roots must not hide path data in a query 
 Assert-Throws -Because 'asset names must not permit path traversal' -MessagePattern '*Invalid release asset name*' -Operation {
     Get-ReleaseAssetUri -ReleaseRootUri $customRoot -AssetName '../VpnCliTray.ps1' | Out-Null
 }
-Assert-Throws -Because 'invalid optional versions must be rejected before downloading' -MessagePattern '*Invalid release version*' -Operation {
-    Invoke-VpnCliTrayManager -RequestedAction 'Install' -RepositoryName 'savidini/VpnCliTray' -RequestedVersion 'latest please' -CreateDesktopShortcut $false -SkipLaunch $false
+$originalElevationProbe = ${function:Test-IsProcessElevated}
+$originalInstallOrUpdate = ${function:Invoke-InstallOrUpdate}
+try {
+    function Test-IsProcessElevated {
+        return $true
+    }
+    function Invoke-InstallOrUpdate {
+        param(
+            [uri]$ReleaseRootUri,
+            [string]$RequestedVersion,
+            [string]$ExpectedPublisherThumbprint,
+            [bool]$CreateDesktopShortcut,
+            [bool]$SkipLaunch
+        )
+        $script:ElevatedInstallAttempted = $true
+    }
+
+    $script:ElevatedInstallAttempted = $false
+    Assert-Throws -Because 'invalid optional versions must be rejected before downloading, including on elevated runners' -MessagePattern '*Invalid release version*' -Operation {
+        Invoke-VpnCliTrayManager -RequestedAction 'Install' -RepositoryName 'savidini/VpnCliTray' -RequestedVersion 'latest please' -CreateDesktopShortcut $false -SkipLaunch $false
+    }
+    Assert-Throws -Because 'an uppercase V version prefix must be rejected before downloading, including on elevated runners' -MessagePattern '*Invalid release version*' -Operation {
+        Invoke-VpnCliTrayManager -RequestedAction 'Install' -RepositoryName 'savidini/VpnCliTray' -RequestedVersion 'V0.2.0' -CreateDesktopShortcut $false -SkipLaunch $false
+    }
+    Assert-Throws -Because 'invalid optional publisher fingerprints must be rejected before downloading, including on elevated runners' -MessagePattern '*40 or 64 hexadecimal*' -Operation {
+        Invoke-VpnCliTrayManager -RequestedAction 'Install' -RepositoryName 'savidini/VpnCliTray' -ExpectedPublisherThumbprint 'not-a-thumbprint' -CreateDesktopShortcut $false -SkipLaunch $false
+    }
+
+    function Read-Host {
+        param([string]$Prompt)
+        return 'q'
+    }
+    try {
+        Assert-Equal $null (Invoke-VpnCliTrayManager -RequestedAction 'Menu' -RepositoryName 'savidini/VpnCliTray' -CreateDesktopShortcut $false -SkipLaunch $false) 'an elevated user must be able to cancel without taking action'
+    }
+    finally {
+        Remove-Item -LiteralPath 'Function:\Read-Host' -Force -ErrorAction SilentlyContinue
+    }
+
+    Assert-Throws -Because 'a valid elevated install must remain blocked before lifecycle code runs' -MessagePattern '*refuses to run with administrator rights*' -Operation {
+        Invoke-VpnCliTrayManager -RequestedAction 'Install' -RepositoryName 'savidini/VpnCliTray' -RequestedVersion '0.2.0' -CreateDesktopShortcut $false -SkipLaunch $false
+    }
+    Assert-Equal $false $script:ElevatedInstallAttempted 'the elevated guard must run before installation lifecycle code'
 }
-Assert-Throws -Because 'an uppercase V version prefix must be rejected before downloading' -MessagePattern '*Invalid release version*' -Operation {
-    Invoke-VpnCliTrayManager -RequestedAction 'Install' -RepositoryName 'savidini/VpnCliTray' -RequestedVersion 'V0.2.0' -CreateDesktopShortcut $false -SkipLaunch $false
-}
-Assert-Throws -Because 'invalid optional publisher fingerprints must be rejected before downloading' -MessagePattern '*40 or 64 hexadecimal*' -Operation {
-    Invoke-VpnCliTrayManager -RequestedAction 'Install' -RepositoryName 'savidini/VpnCliTray' -ExpectedPublisherThumbprint 'not-a-thumbprint' -CreateDesktopShortcut $false -SkipLaunch $false
+finally {
+    Set-Item -LiteralPath 'Function:\Test-IsProcessElevated' -Value $originalElevationProbe
+    Set-Item -LiteralPath 'Function:\Invoke-InstallOrUpdate' -Value $originalInstallOrUpdate
+    Remove-Variable -Name ElevatedInstallAttempted -Scope Script -ErrorAction SilentlyContinue
 }
 
 # Exercise the README's `& ([scriptblock]::Create((irm ...)))` shape without making changes.
