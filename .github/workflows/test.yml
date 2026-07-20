@@ -1,0 +1,53 @@
+name: PowerShell tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-2022
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run application offline tests
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          & $windowsPowerShell `
+              -NoLogo `
+              -NoProfile `
+              -NonInteractive `
+              -ExecutionPolicy Bypass `
+              -File '.\tests\Invoke-Tests.ps1'
+          if ($LASTEXITCODE -ne 0) {
+              throw "Application offline tests failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Run manager offline tests
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          & $windowsPowerShell `
+              -NoLogo `
+              -NoProfile `
+              -NonInteractive `
+              -ExecutionPolicy Bypass `
+              -File '.\tests\Invoke-ManagerTests.ps1'
+          if ($LASTEXITCODE -ne 0) {
+              throw "Manager offline tests failed with exit code $LASTEXITCODE."
+          }

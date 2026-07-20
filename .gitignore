@@ -1,0 +1,37 @@
+# Local runtime artifacts (the installed application normally stores these elsewhere)
+settings.json
+VpnCliTray.log
+VpnCliTray.log.old
+settings.*.tmp
+VpnCliTray.install.*.tmp
+VpnCliTray.install.*.bak
+
+# Exact legacy names retained for one-time AnyConnect Tray migration cleanup
+AnyConnectTray.log
+AnyConnectTray.log.old
+AnyConnectTray.install.*.tmp
+AnyConnectTray.install.*.bak
+
+# Local environment and private signing material
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+*.p12
+*.pvk
+
+# Editor and operating-system metadata
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.code-workspace
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.lnk
