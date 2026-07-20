@@ -17,6 +17,8 @@ Keep the `tests` directory tracked; continuous integration and release publishin
 
 `$script:Version` in `VpnCliTray.ps1` is the application version. Release tags must be exactly `v` followed by that version, such as `v0.2.0`. Update version-specific documentation when the version changes. The release workflow reruns both offline suites, verifies the tag, generates the release manifest, and publishes the manager and application assets.
 
+After a successful release, the Pages workflow resolves the latest stable release and deploys its verified manager asset as `manage.ps1`. Keep the landing page in `pages/index.html`; do not commit a second manager copy. Use the workflow's manual trigger only from `main` when the existing latest release needs to be redeployed.
+
 ## Protect private data
 
 Never commit or post real VPN addresses, usernames, passwords, certificates, Cisco CLI transcripts, encrypted settings, logs, or employer-specific configuration. Use reserved example domains and addresses in tests and documentation. Report security issues privately as described in [SECURITY.md](SECURITY.md).

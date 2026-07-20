@@ -24,7 +24,9 @@ The application records state transitions and summarized errors only. It deliber
 
 ## Remote installation trust
 
-The convenience in-memory command executes the manager delivered by the HTTPS endpoint before local verification is possible. Treat control of the domain, DNS, TLS termination, and GitHub repository as code-signing authority. Users with stricter requirements should download and inspect the manager first or use a version-pinned manager whose hash or Authenticode publisher is verified out of band.
+The convenience in-memory command executes the manager delivered by the HTTPS endpoint before local verification is possible. Treat control of the domain, DNS, TLS termination, GitHub Pages deployment workflow, and GitHub repository as code-signing authority. Users with stricter requirements should download and inspect the manager first or use a version-pinned manager whose hash or Authenticode publisher is verified out of band.
+
+The short Pages URL hosts only the manager copied from the latest published stable GitHub Release. The deployment workflow requires the exact expected release assets and verifies the manager's published size and GitHub SHA-256 digest before deployment. This reduces release-race and transfer-corruption risk, but it does not make a compromised domain, Pages configuration, workflow, or repository trustworthy.
 
 The manager accepts only HTTPS release addresses. It downloads the manifest and application to randomized temporary files, applies size limits and bounded retries, and requires the application's version, byte count, SHA-256 hash, and PowerShell syntax to match before execution. For GitHub's `latest` route, it resolves the manifest first and then pins the application download to that exact versioned release.
 

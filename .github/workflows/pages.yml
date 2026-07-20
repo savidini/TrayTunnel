@@ -1,0 +1,166 @@
+name: Deploy GitHub Pages
+
+on:
+  workflow_run:
+    workflows:
+      - Release
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: pages-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: >-
+      github.repository == 'savidini/VpnCliTray' &&
+      (
+        (
+          github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/main'
+        ) ||
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.head_repository.full_name == github.repository
+        )
+      )
+    name: Build site from latest release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: read
+
+    steps:
+      - name: Check out trusted site template
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Download and verify released manager
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_NAME: Manage-VpnCliTray.ps1
+        run: |
+          set -euo pipefail
+
+          site_directory="${RUNNER_TEMP}/pages-site"
+          release_json="${RUNNER_TEMP}/latest-release.json"
+          mkdir -p -- "${site_directory}"
+
+          gh api \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/releases/latest" >"${release_json}"
+
+          tag="$(jq -er '.tag_name' "${release_json}")"
+          stable_tag_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          if [[ ! "${tag}" =~ ${stable_tag_pattern} ]]; then
+            echo "::error::Latest release tag '${tag}' is not stable SemVer."
+            exit 1
+          fi
+          if [[ "$(jq -r '.draft' "${release_json}")" != 'false' ]] || \
+             [[ "$(jq -r '.prerelease' "${release_json}")" != 'false' ]]; then
+            echo "::error::Latest release '${tag}' is a draft or prerelease."
+            exit 1
+          fi
+
+          expected_assets="$(
+            printf '%s\n' \
+              'Manage-VpnCliTray.ps1' \
+              'VpnCliTray.ps1' \
+              'VpnCliTray.release.json' | LC_ALL=C sort
+          )"
+          actual_assets="$(
+            jq -r '.assets[].name' "${release_json}" | LC_ALL=C sort
+          )"
+          if [[ "${actual_assets}" != "${expected_assets}" ]]; then
+            echo "::error::Release '${tag}' does not contain exactly the expected assets."
+            exit 1
+          fi
+
+          manager_asset="$(
+            jq -cer --arg name "${ASSET_NAME}" \
+              '.assets[] | select(.name == $name)' \
+              "${release_json}"
+          )"
+          manager_id="$(jq -er '.id' <<<"${manager_asset}")"
+          manager_size="$(jq -er '.size' <<<"${manager_asset}")"
+          manager_digest="$(jq -er '.digest' <<<"${manager_asset}")"
+
+          if [[ ! "${manager_id}" =~ ^[0-9]+$ ]]; then
+            echo '::error::Manager asset does not have a valid GitHub asset ID.'
+            exit 1
+          fi
+          if [[ ! "${manager_size}" =~ ^[0-9]+$ ]] || \
+             (( manager_size < 1 || manager_size > 1048576 )); then
+            echo "::error::Manager asset size '${manager_size}' is outside the allowed range."
+            exit 1
+          fi
+          if [[ ! "${manager_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo '::error::Manager asset does not have a valid GitHub SHA-256 digest.'
+            exit 1
+          fi
+
+          manager_path="${site_directory}/manage.ps1"
+          gh api \
+            --header 'Accept: application/octet-stream' \
+            --header 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/releases/assets/${manager_id}" \
+            >"${manager_path}"
+
+          downloaded_size="$(stat --format='%s' "${manager_path}")"
+          downloaded_digest="sha256:$(sha256sum "${manager_path}" | cut -d' ' -f1)"
+          if [[ "${downloaded_size}" != "${manager_size}" ]]; then
+            echo '::error::Downloaded manager size does not match release metadata.'
+            exit 1
+          fi
+          if [[ "${downloaded_digest}" != "${manager_digest}" ]]; then
+            echo '::error::Downloaded manager failed SHA-256 verification.'
+            exit 1
+          fi
+
+          cp -- 'pages/index.html' "${site_directory}/index.html"
+          : >"${site_directory}/.nojekyll"
+          printf '%s  manage.ps1\n' "${manager_digest#sha256:}" \
+            >"${site_directory}/manage.ps1.sha256"
+
+          {
+            printf '### GitHub Pages manager\n\n'
+            printf -- '- Release: [%s](https://github.com/%s/releases/tag/%s)\n' \
+              "${tag}" "${GITHUB_REPOSITORY}" "${tag}"
+            printf -- '- Size: %s bytes\n' "${manager_size}"
+            printf -- '- SHA-256: `%s`\n' "${manager_digest#sha256:}"
+          } >>"${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/pages-site
+
+  deploy:
+    name: Deploy site
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

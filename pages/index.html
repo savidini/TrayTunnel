@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Install and manage VPN CLI Tray for Cisco Secure Client and legacy Cisco AnyConnect on Windows.">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="dark">
+  <title>VPN CLI Tray</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23101d2d'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-size='22' font-family='Arial' font-weight='700' fill='%23b1cb21'%3EVPN%3C/text%3E%3C/svg%3E">
+  <link rel="canonical" href="https://savidini.de/VpnCliTray/">
+  <style>
+    :root {
+      color-scheme: dark;
+      --background: #07111f;
+      --surface: #101d2d;
+      --surface-strong: #16263a;
+      --text: #f4f7fb;
+      --muted: #aebccf;
+      --accent: #b1cb21;
+      --warning: #f5a623;
+      --border: #2a3b51;
+      --shadow: 0 24px 64px rgba(0, 0, 0, 0.32);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      background:
+        radial-gradient(circle at 18% 8%, rgba(177, 203, 33, 0.13), transparent 28rem),
+        linear-gradient(145deg, #07111f 0%, #0b1625 55%, #07111f 100%);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.6;
+    }
+
+    a {
+      color: var(--accent);
+    }
+
+    a:hover {
+      color: #d1e961;
+    }
+
+    main {
+      width: min(920px, calc(100% - 2rem));
+      margin: 0 auto;
+      padding: 4rem 0;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 1.25rem;
+      align-items: center;
+      margin-bottom: 2rem;
+    }
+
+    .mark {
+      display: grid;
+      width: 4.25rem;
+      height: 4.25rem;
+      place-items: center;
+      border: 1px solid rgba(177, 203, 33, 0.45);
+      border-radius: 1.2rem;
+      background: rgba(177, 203, 33, 0.1);
+      box-shadow: 0 0 36px rgba(177, 203, 33, 0.12);
+      color: var(--accent);
+      font-size: 1.25rem;
+      font-weight: 850;
+      letter-spacing: -0.08em;
+    }
+
+    h1,
+    h2 {
+      margin: 0;
+      line-height: 1.15;
+    }
+
+    h1 {
+      font-size: clamp(2rem, 7vw, 3.7rem);
+      letter-spacing: -0.045em;
+    }
+
+    .tagline {
+      max-width: 46rem;
+      margin: 0.5rem 0 0;
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    .panel {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 1.25rem;
+      background: rgba(16, 29, 45, 0.92);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-header,
+    .panel-body {
+      padding: 1.4rem;
+    }
+
+    .panel-header {
+      border-bottom: 1px solid var(--border);
+      background: rgba(22, 38, 58, 0.72);
+    }
+
+    .eyebrow {
+      margin: 0 0 0.35rem;
+      color: var(--accent);
+      font-size: 0.76rem;
+      font-weight: 800;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      font-size: 1.35rem;
+    }
+
+    .command-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 0.75rem;
+      align-items: stretch;
+    }
+
+    pre {
+      min-width: 0;
+      margin: 0;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 0.8rem;
+      background: #050c15;
+      padding: 1rem;
+      color: #e7f1f7;
+      font: 0.86rem/1.55 "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      white-space: pre;
+    }
+
+    button {
+      min-width: 6.5rem;
+      border: 0;
+      border-radius: 0.8rem;
+      background: var(--accent);
+      padding: 0.75rem 1rem;
+      color: #101707;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 800;
+      transition: background 140ms ease, transform 140ms ease;
+    }
+
+    button:hover {
+      background: #c9df4e;
+      transform: translateY(-1px);
+    }
+
+    button:focus-visible,
+    a:focus-visible {
+      outline: 3px solid rgba(177, 203, 33, 0.55);
+      outline-offset: 3px;
+    }
+
+    .hint,
+    .trust {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .hint {
+      min-height: 1.5rem;
+      margin: 0.75rem 0 0;
+    }
+
+    .warning {
+      margin-top: 1.25rem;
+      border-left: 4px solid var(--warning);
+      border-radius: 0.25rem 0.8rem 0.8rem 0.25rem;
+      background: rgba(245, 166, 35, 0.1);
+      padding: 1rem 1.1rem;
+    }
+
+    .warning strong {
+      color: #ffd38a;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .actions a {
+      color: var(--text);
+      font-weight: 650;
+      text-decoration-color: var(--accent);
+      text-underline-offset: 0.25rem;
+    }
+
+    .trust {
+      max-width: 48rem;
+      margin: 2rem auto 0;
+      text-align: center;
+    }
+
+    @media (max-width: 640px) {
+      main {
+        padding: 2rem 0;
+      }
+
+      .hero {
+        grid-template-columns: 1fr;
+      }
+
+      .command-row {
+        grid-template-columns: 1fr;
+      }
+
+      button {
+        min-height: 3rem;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        transition: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <div class="mark" aria-hidden="true">VPN</div>
+      <div>
+        <h1>VPN CLI Tray</h1>
+        <p class="tagline">A small Windows notification-area app for Cisco Secure Client 5.x and legacy AnyConnect 4.x.</p>
+      </div>
+    </header>
+
+    <section class="panel" aria-labelledby="install-heading">
+      <div class="panel-header">
+        <p class="eyebrow">Install &middot; Update &middot; Uninstall</p>
+        <h2 id="install-heading">Open the manager in Windows PowerShell</h2>
+      </div>
+      <div class="panel-body">
+        <div class="command-row">
+          <pre><code id="manager-command">&amp; ([scriptblock]::Create((irm 'https://savidini.de/VpnCliTray/manage.ps1')))</code></pre>
+          <button id="copy-button" type="button">Copy</button>
+        </div>
+        <p class="hint" id="copy-status" role="status">Run this as your normal Windows user, not as Administrator.</p>
+
+        <aside class="warning">
+          <strong>Before connecting:</strong> disable autostart for Cisco's own VPN UI, or fully exit it from the notification area. Leave Cisco's VPN agent service running.
+        </aside>
+
+        <nav class="actions" aria-label="Project links">
+          <a href="./manage.ps1">Review the manager script</a>
+          <a href="./manage.ps1.sha256">SHA-256 checksum</a>
+          <a href="https://github.com/savidini/VpnCliTray" rel="noopener noreferrer">Source and documentation</a>
+          <a href="https://github.com/savidini/VpnCliTray/releases/latest" rel="noopener noreferrer">Latest release</a>
+          <a href="https://github.com/savidini/VpnCliTray/security" rel="noopener noreferrer">Security</a>
+        </nav>
+      </div>
+    </section>
+
+    <p class="trust">The short URL is deployed from the verified manager asset in the latest stable GitHub Release. VPN CLI Tray is independent and is not affiliated with Cisco.</p>
+  </main>
+
+  <script>
+    const button = document.getElementById('copy-button');
+    const command = document.getElementById('manager-command').textContent;
+    const status = document.getElementById('copy-status');
+
+    button.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(command);
+        button.textContent = 'Copied';
+        status.textContent = 'Command copied to the clipboard.';
+      } catch {
+        status.textContent = 'Copy was blocked by the browser; select the command manually.';
+      }
+    });
+  </script>
+</body>
+</html>

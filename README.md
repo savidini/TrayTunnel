@@ -50,26 +50,28 @@ A user cancellation or connection timeout kills the waiting CLI process, sends C
 
 VPN CLI Tray is a per-user tray application, not a Windows service. The manager does not request administrator rights and does not install, remove, stop, or reconfigure Cisco software or the Cisco VPN agent service.
 
-To open one menu for install, update, status, and uninstall, run the manager published with the latest GitHub Release:
+To open one menu for install, update, status, and uninstall, run the manager published from the latest verified GitHub Release at the project's short Pages URL:
 
 ```powershell
-& ([scriptblock]::Create((irm 'https://github.com/savidini/VpnCliTray/releases/latest/download/Manage-VpnCliTray.ps1')))
+& ([scriptblock]::Create((irm 'https://savidini.de/VpnCliTray/manage.ps1')))
 ```
 
 For a direct action, use the script-block form so arguments can be passed:
 
 ```powershell
 # Install
-& ([scriptblock]::Create((irm 'https://github.com/savidini/VpnCliTray/releases/latest/download/Manage-VpnCliTray.ps1'))) -Action Install
+& ([scriptblock]::Create((irm 'https://savidini.de/VpnCliTray/manage.ps1'))) -Action Install
 
 # Update an existing installation
-& ([scriptblock]::Create((irm 'https://github.com/savidini/VpnCliTray/releases/latest/download/Manage-VpnCliTray.ps1'))) -Action Update
+& ([scriptblock]::Create((irm 'https://savidini.de/VpnCliTray/manage.ps1'))) -Action Update
 
 # Uninstall; choose Exit from the tray menu first
-& ([scriptblock]::Create((irm 'https://github.com/savidini/VpnCliTray/releases/latest/download/Manage-VpnCliTray.ps1'))) -Action Uninstall
+& ([scriptblock]::Create((irm 'https://savidini.de/VpnCliTray/manage.ps1'))) -Action Uninstall
 ```
 
 Add `-DesktopShortcut` or `-NoLaunch` to an install command when needed. `-Action Update` is an explicit alias for the same idempotent install path. If the tray is already running, the verified file is updated on disk and the existing process remains on the old version until you choose **Exit** and open it again. An uninstall normally uses the installed local script, so it remains available when GitHub is unreachable.
+
+The Pages workflow deploys `manage.ps1` only from the latest published stable release after verifying GitHub's SHA-256 asset digest. If the short domain is unavailable, use the [direct GitHub Release asset](https://github.com/savidini/VpnCliTray/releases/latest/download/Manage-VpnCliTray.ps1) instead.
 
 For a fixed release, pin both the manager asset and payload version:
 
@@ -85,30 +87,19 @@ Before installing version `0.2.0` or later, exit either tray application if it i
 
 Legacy settings are copied only when they are valid UTF-8 JSON with schema version 1 and `%LOCALAPPDATA%\VpnCliTray\settings.json` does not already exist, so the current Windows user can continue to decrypt the DPAPI-protected password. An existing VPN CLI Tray settings file must also validate and is never overwritten. The new script, startup entry, shortcuts, and settings must verify successfully before cleanup removes recognized legacy artifacts. Unrecognized or invalid legacy files and unrelated directory contents are left in place. If an owned legacy item is locked or otherwise cannot be removed, the command exits with an error while retaining an identity anchor; close the process holding it and run the same command again.
 
-### Short custom-domain link
+### GitHub Pages short link
 
-For the shortest public command, serve the exact released `Manage-VpnCliTray.ps1` as UTF-8 `text/plain` from a small HTTPS endpoint on your domain. The endpoint can redirect to version-controlled content; keep the application and manifest as immutable GitHub Release assets.
+The [VPN CLI Tray page](https://savidini.de/VpnCliTray/) provides the install command and publishes the released manager at:
 
-```powershell
-& ([scriptblock]::Create((irm 'https://get.example.com/vpnclitray')))
+```text
+https://savidini.de/VpnCliTray/manage.ps1
 ```
 
-Replace the example URL with your domain. The same endpoint supports direct actions:
+GitHub's default `https://savidini.github.io/VpnCliTray/` address redirects to the custom domain. After a successful release run, the Pages workflow independently resolves the latest stable release, requires the exact expected asset set, downloads `Manage-VpnCliTray.ps1` over HTTPS, verifies its published size and SHA-256 digest, and deploys that unchanged file. It can also be run manually to restore or verify the site without creating a release.
 
-```powershell
-& ([scriptblock]::Create((irm 'https://get.example.com/vpnclitray'))) -Action Install
-& ([scriptblock]::Create((irm 'https://get.example.com/vpnclitray'))) -Action Uninstall
-```
+Only the manager is mirrored to Pages; the manifest and application remain GitHub Release assets, so do not use the Pages directory as `-ReleaseBaseUri`.
 
-If the VPS also mirrors the manifest and application assets, point the same manager at that exact HTTPS directory:
-
-```powershell
-& ([scriptblock]::Create((irm 'https://get.example.com/vpnclitray'))) -Action Install -ReleaseBaseUri 'https://get.example.com/releases/latest/'
-```
-
-Do not combine `-ReleaseBaseUri` with `-Version`; a custom base URI already identifies the release directory.
-
-The one-line form necessarily trusts the HTTPS endpoint before it can perform its own checks. Users who need to inspect the manager first should download it to a file, review it, and run that file instead of executing the downloaded text directly from memory.
+The one-line form necessarily trusts the HTTPS endpoint before it can perform its own checks. Users who need to inspect the manager first should open or download `manage.ps1`, review it, and run that file instead of executing the downloaded text directly from memory.
 
 ## Install from a local clone
 
@@ -255,6 +246,7 @@ Support is provided on a best-effort basis through GitHub issues. This independe
 - The project deliberately does not redistribute Cisco icons or binaries. Generated colored status icons are used at runtime, while shortcuts may reference the locally installed `UI\csc_ui.exe` or legacy `vpnui.exe` icon.
 - The manager and documented install URLs target `savidini/VpnCliTray`; keep them aligned if the repository is ever transferred or renamed.
 - Pushing a tag such as `v0.2.0` runs both offline suites, requires the tag to match `$script:Version`, generates the release manifest, uploads the manager and application as draft assets, and then publishes the release.
+- A successful Release workflow triggers the Pages workflow, which republishes the verified manager asset from GitHub's latest stable release at the short URL.
 - Protect `main` and restrict creation, update, and deletion of `v*` tags to trusted maintainers before enabling releases. The tag workflow deliberately runs release code with `contents: write`; a GitHub environment approval is an additional safeguard.
 - Enable immutable releases in the GitHub repository or organization settings so published tags and assets cannot be replaced.
 - Licensed under the [MIT License](LICENSE).
