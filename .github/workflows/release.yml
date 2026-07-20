@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to verify and publish
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 permissions:
   contents: write
@@ -23,6 +32,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
@@ -32,21 +42,38 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          $stableReleaseTagPattern = '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          if ($env:RELEASE_TAG -cnotmatch $stableReleaseTagPattern) {
+              throw "Release tag '$env:RELEASE_TAG' is not a stable SemVer tag."
+          }
+
           & git rev-parse --verify --quiet 'origin/main^{commit}' | Out-Null
           if ($LASTEXITCODE -ne 0) {
               throw 'The protected release branch origin/main was not found.'
           }
 
-          $tagCommitOutput = @(& git rev-parse "$env:GITHUB_REF_NAME^{commit}")
+          $tagCommitOutput = @(& git rev-parse --verify --end-of-options "refs/tags/$($env:RELEASE_TAG)^{commit}")
           $tagCommitExitCode = $LASTEXITCODE
           $tagCommit = ($tagCommitOutput -join '').Trim()
           if ($tagCommitExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($tagCommit)) {
-              throw "Could not resolve release tag '$env:GITHUB_REF_NAME' to a commit."
+              throw "Could not resolve release tag '$env:RELEASE_TAG' to a commit."
+          }
+
+          $checkedOutCommitOutput = @(& git rev-parse --verify 'HEAD^{commit}')
+          $checkedOutCommitExitCode = $LASTEXITCODE
+          $checkedOutCommit = ($checkedOutCommitOutput -join '').Trim()
+          if ($checkedOutCommitExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($checkedOutCommit)) {
+              throw 'Could not resolve the checked-out commit.'
+          }
+          if ($checkedOutCommit -cne $tagCommit) {
+              throw (
+                  "Checked-out commit '$checkedOutCommit' does not match release tag commit '$tagCommit'."
+              )
           }
 
           & git merge-base --is-ancestor $tagCommit 'origin/main'
           if ($LASTEXITCODE -ne 0) {
-              throw "Release tag '$env:GITHUB_REF_NAME' does not point to a commit on origin/main."
+              throw "Release tag '$env:RELEASE_TAG' does not point to a commit on origin/main."
           }
 
       - name: Run application offline tests
@@ -100,8 +127,8 @@ jobs:
           }
 
           $expectedTag = 'v' + $version
-          if ($env:GITHUB_REF_NAME -cne $expectedTag) {
-              throw "Tag '$env:GITHUB_REF_NAME' does not match application version '$version' (expected '$expectedTag')."
+          if ($env:RELEASE_TAG -cne $expectedTag) {
+              throw "Tag '$env:RELEASE_TAG' does not match application version '$version' (expected '$expectedTag')."
           }
 
           $releaseDirectory = Join-Path $env:RUNNER_TEMP (
@@ -147,14 +174,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $tag = $env:GITHUB_REF_NAME
+          $tag = $env:RELEASE_TAG
 
-          $existingReleaseOutput = @(
-              & gh release view $tag --json tagName,isDraft 2>$null
+          function Invoke-GhAllowFailure {
+              param(
+                  [Parameter(Mandatory = $true)]
+                  [string[]]$Arguments
+              )
+
+              $previousErrorActionPreference = $ErrorActionPreference
+              try {
+                  $ErrorActionPreference = 'Continue'
+                  $commandOutput = @(& gh @Arguments 2>$null)
+                  $commandExitCode = $LASTEXITCODE
+              }
+              finally {
+                  $ErrorActionPreference = $previousErrorActionPreference
+              }
+
+              return [pscustomobject]@{
+                  ExitCode = [int]$commandExitCode
+                  Output   = @($commandOutput)
+              }
+          }
+
+          $existingReleaseProbe = Invoke-GhAllowFailure -Arguments @(
+              'release', 'view', $tag, '--json', 'tagName,isDraft'
           )
-          $existingReleaseExitCode = $LASTEXITCODE
+          $existingReleaseExitCode = $existingReleaseProbe.ExitCode
           if ($existingReleaseExitCode -eq 0) {
-              $existingRelease = ($existingReleaseOutput -join [Environment]::NewLine) | ConvertFrom-Json
+              $existingRelease = ($existingReleaseProbe.Output -join [Environment]::NewLine) | ConvertFrom-Json
               if ($existingRelease.tagName -cne $tag) {
                   throw "The existing release resolved to unexpected tag '$($existingRelease.tagName)'."
               }
@@ -282,12 +331,12 @@ jobs:
           }
 
           $markLatest = $true
-          $latestReleaseOutput = @(
-              & gh release view --json tagName,isDraft,isPrerelease 2>$null
+          $latestReleaseProbe = Invoke-GhAllowFailure -Arguments @(
+              'release', 'view', '--json', 'tagName,isDraft,isPrerelease'
           )
-          $latestReleaseExitCode = $LASTEXITCODE
+          $latestReleaseExitCode = $latestReleaseProbe.ExitCode
           if ($latestReleaseExitCode -eq 0) {
-              $latestRelease = ($latestReleaseOutput -join [Environment]::NewLine) | ConvertFrom-Json
+              $latestRelease = ($latestReleaseProbe.Output -join [Environment]::NewLine) | ConvertFrom-Json
               if ([bool]$latestRelease.isDraft -or [bool]$latestRelease.isPrerelease) {
                   throw 'GitHub returned a draft or prerelease as the latest published stable release.'
               }
