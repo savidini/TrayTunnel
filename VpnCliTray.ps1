@@ -36,7 +36,7 @@ $ErrorActionPreference = 'Stop'
 
 $script:ProductName = 'VPN CLI Tray'
 $script:AppId = 'VpnCliTray'
-$script:Version = '0.2.0'
+$script:Version = '0.2.1'
 $script:SettingsSchemaVersion = 1
 $script:RunKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $script:LocalAppData = [Environment]::GetFolderPath('LocalApplicationData')
@@ -848,7 +848,7 @@ function Get-ConnectionStateFromText {
 
     $matches = [regex]::Matches(
         $Text,
-        "(?im)^\s*(?:(?:>>\s*)?state|Connection\s+State)\s*:\s*(.+?)\s*$"
+        "(?im)^\s*(?:VPN>\s*)?(?:(?:>>\s*)?state|Connection\s+State)\s*:\s*(.+?)\s*$"
     )
 
     if ($matches.Count -gt 0) {
@@ -2437,7 +2437,7 @@ function Set-ApplicationState {
 function Get-VpnCliArguments {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Status', 'Connect', 'Disconnect')]
+        [ValidateSet('Status', 'Connect', 'Disconnect', 'NotificationListener')]
         [string]$Operation
     )
 
@@ -2445,17 +2445,505 @@ function Get-VpnCliArguments {
         'Status' { return 'state' }
         'Connect' { return '-s' }
         'Disconnect' { return 'disconnect' }
+        'NotificationListener' { return '-s' }
     }
 }
 
 function Test-VpnCliUsesStandardInput {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Status', 'Connect', 'Disconnect')]
+        [ValidateSet('Status', 'Connect', 'Disconnect', 'NotificationListener')]
         [string]$Operation
     )
 
-    return $Operation -eq 'Connect'
+    return $Operation -in @('Connect', 'NotificationListener')
+}
+
+function Get-CliOperationTransport {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Status', 'Connect', 'Disconnect')]
+        [string]$Operation,
+
+        [bool]$NotificationListenerAvailable = $false,
+
+        [bool]$NotificationListenerRunning = $false
+    )
+
+    if ($Operation -eq 'Status') {
+        if ($NotificationListenerAvailable) {
+            return 'NotificationListener'
+        }
+        if ($NotificationListenerRunning) {
+            return 'Defer'
+        }
+    }
+
+    return 'Process'
+}
+
+function Get-CiscoCliNotificationFromLine {
+    param(
+        [AllowNull()]
+        [string]$Line
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Line)) {
+        return $null
+    }
+
+    $payload = $Line -replace '^\s*(?:VPN>\s*)?', ''
+    $match = [regex]::Match($payload, '^\s*>>\s*(error|notice)\s*:\s*(.+?)\s*$', 'IgnoreCase')
+    if (-not $match.Success) {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        Kind    = $match.Groups[1].Value.ToLowerInvariant()
+        Message = $match.Groups[2].Value.Trim()
+    }
+}
+
+function Test-CiscoCliRegistrationLine {
+    param(
+        [AllowNull()]
+        [string]$Line
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Line)) {
+        return $false
+    }
+
+    return [regex]::IsMatch(
+        $Line,
+        '^\s*(?:VPN>\s*)?(?:>>\s*)?registered\s+with\s+local\s+VPN\s+subsystem\.?\s*$',
+        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+    )
+}
+
+function Test-CliNotificationListenerRequired {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('InitialDisconnected', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
+        [string]$State
+    )
+
+    return $State -in @('Connecting', 'Disconnecting', 'Connected')
+}
+
+function Get-CliNotificationListenerRetentionAction {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('InitialDisconnected', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
+        [string]$State,
+
+        [Parameter(Mandatory = $true)]
+        [DateTime]$Now,
+
+        [Parameter(Mandatory = $true)]
+        [DateTime]$StopAfter
+    )
+
+    if (Test-CliNotificationListenerRequired -State $State) {
+        return 'Keep'
+    }
+    if ($StopAfter -eq [DateTime]::MaxValue) {
+        return 'StartGrace'
+    }
+    if ($Now -ge $StopAfter) {
+        return 'Stop'
+    }
+
+    return 'Keep'
+}
+
+function Test-CliNotificationListenerRunning {
+    if ($null -eq $script:CliNotificationListener) {
+        return $false
+    }
+
+    try {
+        return -not $script:CliNotificationListener.Process.HasExited
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-CliNotificationListenerAvailable {
+    if (-not (Test-CliNotificationListenerRunning)) {
+        return $false
+    }
+
+    return [bool]$script:CliNotificationListener.Registered -and
+        -not [bool]$script:CliNotificationListener.ReadFailed
+}
+
+function Test-CliNotificationListenerRegistrationTimedOut {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Listener,
+
+        [Parameter(Mandatory = $true)]
+        [DateTime]$Now
+    )
+
+    return -not [bool]$Listener.Registered -and
+        $Now -ge [DateTime]$Listener.RegistrationDeadline
+}
+
+function Test-CliNotificationStatusOperationSucceeded {
+    param(
+        [AllowNull()]
+        [object]$Operation
+    )
+
+    if ($null -eq $Operation -or
+        [string](Get-ObjectPropertyValue -InputObject $Operation -Name 'Transport' -DefaultValue 'Process') -ne 'NotificationListener' -or
+        -not [bool](Get-ObjectPropertyValue -InputObject $Operation -Name 'Completed' -DefaultValue $false)) {
+        return $false
+    }
+
+    $reportedState = [string](Get-ObjectPropertyValue -InputObject $Operation -Name 'ReportedState' -DefaultValue '')
+    return $reportedState -in @('Connected', 'Disconnected', 'Connecting', 'Disconnecting', 'Reconnecting')
+}
+
+function Start-CliNotificationListener {
+    if (Test-CliNotificationListenerRunning) {
+        return $true
+    }
+
+    if ($null -ne $script:CliNotificationListener) {
+        Stop-CliNotificationListener -Reason 'stale listener cleanup'
+    }
+
+    $vpnCliPath = Resolve-VpnCliPath -ConfiguredPath $script:Settings.VpnCliPath
+    if ($null -eq $vpnCliPath) {
+        $script:NextCliNotificationListenerStart = [DateTime]::UtcNow.AddSeconds(15)
+        return $false
+    }
+
+    $process = $null
+    try {
+        $startInfo = New-Object Diagnostics.ProcessStartInfo
+        $startInfo.FileName = $vpnCliPath
+        $startInfo.Arguments = Get-VpnCliArguments -Operation 'NotificationListener'
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+
+        $process = New-Object Diagnostics.Process
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) {
+            throw 'vpncli.exe did not start.'
+        }
+
+        $process.StandardInput.AutoFlush = $true
+        $startedAt = [DateTime]::UtcNow
+        $listener = [pscustomobject]@{
+            Process        = $process
+            StandardInput  = $process.StandardInput
+            OutputReader   = $process.StandardOutput
+            ErrorReader    = $process.StandardError
+            OutputReadTask = $null
+            ErrorReadTask  = $null
+            ReadFailed     = $false
+            Registered     = $false
+            StateSequence        = [long]0
+            LastState            = $null
+            StopAfter            = [DateTime]::MaxValue
+            StartedAt            = $startedAt
+            RegistrationDeadline = $startedAt.AddSeconds(10)
+        }
+        $listener.OutputReadTask = $listener.OutputReader.ReadLineAsync()
+        $listener.ErrorReadTask = $listener.ErrorReader.ReadLineAsync()
+        $script:CliNotificationListener = $listener
+        $script:NextCliNotificationListenerStart = [DateTime]::MaxValue
+        Write-AppLog -Message 'Cisco CLI notification listener process started; waiting for VPN subsystem registration.'
+        return $true
+    }
+    catch {
+        if ($null -ne $process) {
+            try {
+                if (-not $process.HasExited) {
+                    $process.Kill()
+                    $process.WaitForExit(2000) | Out-Null
+                }
+            }
+            catch {
+            }
+            $process.Dispose()
+        }
+
+        $script:CliNotificationListener = $null
+        $script:NextCliNotificationListenerStart = [DateTime]::UtcNow.AddSeconds(15)
+        Write-AppLog -Level 'WARN' -Message ("Could not start the Cisco CLI notification listener: {0}" -f $_.Exception.Message)
+        return $false
+    }
+}
+
+function Stop-CliNotificationListener {
+    param(
+        [string]$Reason = 'cleanup'
+    )
+
+    $listener = $script:CliNotificationListener
+    $script:CliNotificationListener = $null
+    $script:NextCliNotificationListenerStart = [DateTime]::UtcNow
+    if ($null -eq $listener) {
+        return
+    }
+
+    try {
+        if (-not $listener.Process.HasExited) {
+            try {
+                $listener.StandardInput.WriteLine('quit')
+                $listener.StandardInput.Flush()
+                $listener.StandardInput.Close()
+            }
+            catch {
+            }
+
+            if (-not $listener.Process.WaitForExit(1500)) {
+                $listener.Process.Kill()
+                if (-not $listener.Process.WaitForExit(2000)) {
+                    Write-AppLog -Level 'WARN' -Message ("The Cisco CLI notification listener did not exit promptly during {0}." -f $Reason)
+                }
+            }
+        }
+    }
+    catch {
+        Write-AppLog -Level 'WARN' -Message ("Could not stop the Cisco CLI notification listener during {0}: {1}" -f $Reason, $_.Exception.Message)
+    }
+    finally {
+        try {
+            $listener.Process.Dispose()
+        }
+        catch {
+        }
+    }
+}
+
+function Receive-CliNotificationListenerLine {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Listener,
+
+        [AllowNull()]
+        [string]$Line
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Line)) {
+        return
+    }
+
+    if ((Test-CiscoCliRegistrationLine -Line $Line) -and -not [bool]$Listener.Registered) {
+        $Listener.Registered = $true
+        Write-AppLog -Message 'Cisco CLI notification listener registered with the local VPN subsystem.'
+    }
+
+    $state = Get-ConnectionStateFromText -Text $Line
+    if ($null -ne $state) {
+        $Listener.StateSequence = [long]$Listener.StateSequence + 1
+        $Listener.LastState = $state
+
+        $operation = $script:ActiveOperation
+        if ($null -ne $operation -and
+            [string](Get-ObjectPropertyValue -InputObject $operation -Name 'Transport' -DefaultValue 'Process') -eq 'NotificationListener' -and
+            $Listener.StateSequence -gt [long]$operation.MinimumStateSequence) {
+            $operation.ReportedState = $state
+            $operation.Completed = $true
+        }
+        elseif ($null -eq $operation -and $Listener.Registered) {
+            Set-ApplicationStateFromCiscoState -State $state
+        }
+        return
+    }
+
+    if (-not $Listener.Registered) {
+        return
+    }
+
+    $notification = Get-CiscoCliNotificationFromLine -Line $Line
+    if ($null -eq $notification) {
+        return
+    }
+
+    $level = if ($notification.Kind -eq 'error') { 'ERROR' } else { 'INFO' }
+    Write-AppLog -Level $level -Message ("Cisco CLI {0} received by the hidden notification listener." -f $notification.Kind)
+}
+
+function Receive-CliNotificationListenerStream {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Listener,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Output', 'Error')]
+        [string]$StreamName
+    )
+
+    $readerProperty = $StreamName + 'Reader'
+    $taskProperty = $StreamName + 'ReadTask'
+    for ($lineCount = 0; $lineCount -lt 128; $lineCount++) {
+        $task = $Listener.$taskProperty
+        if ($null -eq $task -or -not $task.IsCompleted) {
+            break
+        }
+
+        try {
+            $line = $task.GetAwaiter().GetResult()
+        }
+        catch {
+            $Listener.$taskProperty = $null
+            $Listener.ReadFailed = $true
+            Write-AppLog -Level 'WARN' -Message ("Could not read the Cisco CLI notification listener {0}: {1}" -f $StreamName.ToLowerInvariant(), $_.Exception.Message)
+            break
+        }
+
+        if ($null -eq $line) {
+            $Listener.$taskProperty = $null
+            $Listener.ReadFailed = $true
+            break
+        }
+
+        Receive-CliNotificationListenerLine -Listener $Listener -Line $line
+        try {
+            $Listener.$taskProperty = $Listener.$readerProperty.ReadLineAsync()
+        }
+        catch {
+            $Listener.$taskProperty = $null
+            $Listener.ReadFailed = $true
+            Write-AppLog -Level 'WARN' -Message ("Could not continue reading the Cisco CLI notification listener {0}: {1}" -f $StreamName.ToLowerInvariant(), $_.Exception.Message)
+            break
+        }
+    }
+}
+
+function Receive-CliNotificationListenerOutput {
+    $listener = $script:CliNotificationListener
+    if ($null -eq $listener) {
+        return
+    }
+
+    Receive-CliNotificationListenerStream -Listener $listener -StreamName 'Output'
+    Receive-CliNotificationListenerStream -Listener $listener -StreamName 'Error'
+}
+
+function Start-CliNotificationListenerStatus {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$TimeoutSeconds
+    )
+
+    if ($null -ne $script:ActiveOperation -or -not (Test-CliNotificationListenerAvailable)) {
+        return $false
+    }
+
+    Receive-CliNotificationListenerOutput
+    $listener = $script:CliNotificationListener
+    if ($null -eq $listener -or -not (Test-CliNotificationListenerAvailable)) {
+        return $false
+    }
+
+    $operation = [pscustomobject]@{
+        Name                 = 'Status'
+        Transport            = 'NotificationListener'
+        StartedAt            = [DateTime]::UtcNow
+        TimeoutSeconds       = $TimeoutSeconds
+        MinimumStateSequence = [long]$listener.StateSequence
+        ReportedState        = $null
+        Completed            = $false
+    }
+    $script:ActiveOperation = $operation
+
+    try {
+        $listener.StandardInput.WriteLine('state')
+        $listener.StandardInput.Flush()
+        return $true
+    }
+    catch {
+        $script:ActiveOperation = $null
+        Write-AppLog -Level 'WARN' -Message ("Could not query status through the Cisco CLI notification listener: {0}" -f $_.Exception.Message)
+        Stop-CliNotificationListener -Reason 'status write failure'
+        return $false
+    }
+}
+
+function Update-CliNotificationListener {
+    param(
+        [Parameter(Mandatory = $true)]
+        [DateTime]$Now
+    )
+
+    $listener = $script:CliNotificationListener
+    if ($null -ne $listener) {
+        Receive-CliNotificationListenerOutput
+        $listenerExited = $false
+        try {
+            $listenerExited = $listener.Process.HasExited
+        }
+        catch {
+            $listenerExited = $true
+        }
+
+        if ($listenerExited -or $listener.ReadFailed) {
+            $listenerOperation = $script:ActiveOperation
+            $listenerOperationPending = $null -ne $listenerOperation -and
+                [string](Get-ObjectPropertyValue -InputObject $listenerOperation -Name 'Transport' -DefaultValue 'Process') -eq 'NotificationListener'
+            $listenerOperationSucceeded = Test-CliNotificationStatusOperationSucceeded -Operation $listenerOperation
+            $listenerReportedState = if ($listenerOperationSucceeded) { [string]$listenerOperation.ReportedState } else { $null }
+            if ($listenerOperationPending) {
+                $script:ActiveOperation = $null
+            }
+
+            Stop-CliNotificationListener -Reason 'listener exit'
+            $script:NextCliNotificationListenerStart = $Now.AddSeconds(5)
+            Write-AppLog -Level 'WARN' -Message 'The Cisco CLI notification listener exited unexpectedly.'
+            if ($listenerOperationSucceeded) {
+                Complete-StatusQuery -State $listenerReportedState -Succeeded $true -TimedOut $false
+            }
+            elseif ($listenerOperationPending) {
+                Complete-StatusQuery -State $null -Succeeded $false -TimedOut $true
+            }
+            return
+        }
+
+        if (Test-CliNotificationListenerRegistrationTimedOut -Listener $listener -Now $Now) {
+            Stop-CliNotificationListener -Reason 'registration timeout'
+            $script:NextCliNotificationListenerStart = $Now.AddSeconds(15)
+            Write-AppLog -Level 'WARN' -Message 'The Cisco CLI notification listener did not register with the VPN subsystem within 10 seconds; modal suppression is not active and will be retried.'
+            return
+        }
+
+        if ($null -eq $script:ActiveOperation) {
+            $retentionAction = Get-CliNotificationListenerRetentionAction -State $script:ApplicationState -Now $Now -StopAfter $listener.StopAfter
+            switch ($retentionAction) {
+                'StartGrace' {
+                    # Cisco can emit the terminal error after its Disconnected state.
+                    $listener.StopAfter = $Now.AddSeconds(5)
+                }
+                'Stop' {
+                    Stop-CliNotificationListener -Reason 'terminal notification grace period ended'
+                }
+                'Keep' {
+                    if (Test-CliNotificationListenerRequired -State $script:ApplicationState) {
+                        $listener.StopAfter = [DateTime]::MaxValue
+                    }
+                }
+            }
+        }
+        return
+    }
+
+    if ($null -eq $script:ActiveOperation -and
+        (Test-CliNotificationListenerRequired -State $script:ApplicationState) -and
+        $Now -ge $script:NextCliNotificationListenerStart) {
+        [void](Start-CliNotificationListener)
+    }
 }
 
 function Start-CliOperation {
@@ -2474,6 +2962,20 @@ function Start-CliOperation {
 
     if ($null -ne $script:ActiveOperation) {
         return $false
+    }
+
+    $listenerRunning = Test-CliNotificationListenerRunning
+    $listenerAvailable = Test-CliNotificationListenerAvailable
+    $transport = Get-CliOperationTransport -Operation $Operation -NotificationListenerAvailable $listenerAvailable -NotificationListenerRunning $listenerRunning
+    if ($transport -eq 'Defer') {
+        return $false
+    }
+    if ($transport -eq 'NotificationListener') {
+        return Start-CliNotificationListenerStatus -TimeoutSeconds $TimeoutSeconds
+    }
+
+    if ($Operation -in @('Connect', 'Disconnect') -and $null -ne $script:CliNotificationListener) {
+        Stop-CliNotificationListener -Reason ("starting {0}" -f $Operation.ToLowerInvariant())
     }
 
     $vpnCliPath = Resolve-VpnCliPath -ConfiguredPath $script:Settings.VpnCliPath
@@ -2513,6 +3015,7 @@ function Start-CliOperation {
 
         $script:ActiveOperation = [pscustomobject]@{
             Name           = $Operation
+            Transport      = 'Process'
             Process        = $process
             StandardOutput = $stdoutTask
             StandardError  = $stderrTask
@@ -2583,7 +3086,10 @@ function Stop-ActiveCliOperation {
     # Detach first. Timer and click handlers share the Forms thread, so the
     # detached operation can no longer complete and overwrite cancellation.
     $script:ActiveOperation = $null
-    Stop-CliProcess -Operation $operation -Reason $Reason
+    $transport = [string](Get-ObjectPropertyValue -InputObject $operation -Name 'Transport' -DefaultValue 'Process')
+    if ($transport -eq 'Process') {
+        Stop-CliProcess -Operation $operation -Reason $Reason
+    }
     return [string]$operation.Name
 }
 
@@ -2739,6 +3245,120 @@ function Start-VerifiedDisconnect {
     return $started
 }
 
+function Set-ApplicationStateFromCiscoState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Connected', 'Disconnected', 'Connecting', 'Disconnecting', 'Reconnecting')]
+        [string]$State
+    )
+
+    switch ($State) {
+        'Connected' {
+            Set-ApplicationState -State 'Connected'
+        }
+        'Connecting' {
+            Set-ApplicationState -State 'Connecting'
+        }
+        'Reconnecting' {
+            if (Test-BasicNetworkAvailable) {
+                Set-ApplicationState -State 'Connecting' -Detail 'Reconnecting'
+            }
+            else {
+                Set-ApplicationState -State 'Connecting' -Detail 'Waiting for network'
+            }
+        }
+        'Disconnecting' {
+            Set-ApplicationState -State 'Disconnecting'
+        }
+        'Disconnected' {
+            if ($script:ApplicationState -eq 'Connected') {
+                Set-ApplicationState -State 'DisconnectedError' -Detail 'Connection lost'
+                Write-AppLog -Level 'WARN' -Message 'The VPN connection was lost.'
+            }
+            elseif ($script:ApplicationState -in @('Connecting', 'Disconnecting')) {
+                Set-ApplicationState -State 'DisconnectedError'
+            }
+            elseif ($script:ApplicationState -ne 'DisconnectedError' -or
+                (Test-StateDetailUncertain -Detail $script:StateDetail) -or
+                $script:StateDetail -eq 'No network connection') {
+                Set-ApplicationState -State 'InitialDisconnected'
+            }
+        }
+    }
+}
+
+function Complete-StatusQuery {
+    param(
+        [AllowNull()]
+        [string]$State,
+
+        [bool]$Succeeded,
+
+        [bool]$TimedOut,
+
+        [AllowEmptyString()]
+        [string]$FailureDescription = ''
+    )
+
+    $script:NextStatusPoll = [DateTime]::UtcNow.AddSeconds(5)
+    if ($TimedOut) {
+        if ($script:DisconnectDeadline -gt [DateTime]::MinValue) {
+            Write-AppLog -Level 'WARN' -Message 'The state query timed out during disconnect verification.'
+            [void](Continue-DisconnectVerification)
+        }
+        elseif (-not (Test-BasicNetworkAvailable)) {
+            Set-NetworkUnavailableState
+        }
+        else {
+            Set-VpnStateUnavailableState
+            Write-AppLog -Level 'ERROR' -Message 'The Status operation timed out.'
+        }
+        return
+    }
+
+    if ($script:DisconnectDeadline -gt [DateTime]::MinValue) {
+        if ($Succeeded -and $State -eq 'Disconnected') {
+            Complete-DisconnectVerification -Outcome 'Success'
+            return
+        }
+
+        if ([DateTime]::UtcNow -lt $script:DisconnectDeadline) {
+            [void](Continue-DisconnectVerification)
+            return
+        }
+
+        if ($Succeeded -and $State -eq 'Connected') {
+            Complete-DisconnectVerification -Outcome 'Connected'
+        }
+        elseif ($Succeeded -and $State -in @('Connecting', 'Reconnecting', 'Disconnecting')) {
+            Complete-DisconnectVerification -Outcome 'Active'
+        }
+        else {
+            Complete-DisconnectVerification -Outcome 'Unavailable'
+        }
+        return
+    }
+
+    if (-not $Succeeded -or $null -eq $State) {
+        if (-not (Test-BasicNetworkAvailable)) {
+            Set-NetworkUnavailableState
+        }
+        else {
+            Set-VpnStateUnavailableState
+            $failureSuffix = if ([string]::IsNullOrWhiteSpace($FailureDescription)) {
+                ''
+            }
+            else {
+                ' (' + $FailureDescription + ')'
+            }
+            Write-AppLog -Level 'WARN' -Message ("The state query returned no recognized state{0}." -f $failureSuffix)
+        }
+        return
+    }
+
+    Set-ApplicationStateFromCiscoState -State $State
+}
+
 function Complete-CliOperation {
     param(
         [Parameter(Mandatory = $true)]
@@ -2774,20 +3394,20 @@ function Complete-CliOperation {
         $Operation.Process.Dispose()
     }
 
-    $state = Get-ConnectionStateFromText -Text ($stdout + "`n" + $stderr)
+    $state = Get-ConnectionStateFromText -Text ($stdout + [Environment]::NewLine + $stderr)
     if ($Operation.Name -ne 'Status') {
         $reportedState = if ($null -eq $state) { 'Unknown' } else { $state }
         Write-AppLog -Message ("Cisco CLI {0} completed with exit code {1} and state {2}." -f $Operation.Name, $exitCode, $reportedState)
     }
     $stdout = $null
     $stderr = $null
-    $script:NextStatusPoll = if ($Operation.Name -eq 'Status') {
-        [DateTime]::UtcNow.AddSeconds(5)
-    }
-    else {
-        [DateTime]::UtcNow.AddSeconds(1)
+
+    if ($Operation.Name -eq 'Status') {
+        Complete-StatusQuery -State $state -Succeeded ($exitCode -eq 0) -TimedOut $TimedOut -FailureDescription ("exit code {0}" -f $exitCode)
+        return
     }
 
+    $script:NextStatusPoll = [DateTime]::UtcNow.AddSeconds(1)
     if ($TimedOut) {
         switch ($Operation.Name) {
             'Connect' {
@@ -2798,95 +3418,11 @@ function Complete-CliOperation {
                 Write-AppLog -Level 'WARN' -Message 'The direct disconnect command timed out; verifying Cisco state.'
                 [void](Continue-DisconnectVerification)
             }
-            'Status' {
-                if ($script:DisconnectDeadline -gt [DateTime]::MinValue) {
-                    Write-AppLog -Level 'WARN' -Message 'The state query timed out during disconnect verification.'
-                    [void](Continue-DisconnectVerification)
-                }
-                elseif (-not (Test-BasicNetworkAvailable)) {
-                    Set-NetworkUnavailableState
-                    $script:NextStatusPoll = [DateTime]::UtcNow.AddSeconds(5)
-                }
-                else {
-                    Set-VpnStateUnavailableState
-                    Write-AppLog -Level 'ERROR' -Message 'The Status operation timed out.'
-                }
-            }
         }
         return
     }
 
     switch ($Operation.Name) {
-        'Status' {
-            if ($script:DisconnectDeadline -gt [DateTime]::MinValue) {
-                if ($exitCode -eq 0 -and $state -eq 'Disconnected') {
-                    Complete-DisconnectVerification -Outcome 'Success'
-                    return
-                }
-
-                if ([DateTime]::UtcNow -lt $script:DisconnectDeadline) {
-                    [void](Continue-DisconnectVerification)
-                    return
-                }
-
-                if ($exitCode -eq 0 -and $state -eq 'Connected') {
-                    Complete-DisconnectVerification -Outcome 'Connected'
-                }
-                elseif ($exitCode -eq 0 -and
-                    $state -in @('Connecting', 'Reconnecting', 'Disconnecting')) {
-                    Complete-DisconnectVerification -Outcome 'Active'
-                }
-                else {
-                    Complete-DisconnectVerification -Outcome 'Unavailable'
-                }
-                return
-            }
-
-            if ($exitCode -ne 0 -or $null -eq $state) {
-                if (-not (Test-BasicNetworkAvailable)) {
-                    Set-NetworkUnavailableState
-                }
-                else {
-                    Set-VpnStateUnavailableState
-                    Write-AppLog -Level 'WARN' -Message ("The state query returned unrecognized output (exit code {0})." -f $exitCode)
-                }
-                return
-            }
-
-            switch ($state) {
-                'Connected' {
-                    Set-ApplicationState -State 'Connected'
-                }
-                'Connecting' {
-                    Set-ApplicationState -State 'Connecting'
-                }
-                'Reconnecting' {
-                    if (Test-BasicNetworkAvailable) {
-                        Set-ApplicationState -State 'Connecting' -Detail 'Reconnecting'
-                    }
-                    else {
-                        Set-ApplicationState -State 'Connecting' -Detail 'Waiting for network'
-                    }
-                }
-                'Disconnecting' {
-                    Set-ApplicationState -State 'Disconnecting'
-                }
-                'Disconnected' {
-                    if ($script:ApplicationState -eq 'Connected') {
-                        Set-ApplicationState -State 'DisconnectedError' -Detail 'Connection lost'
-                        Write-AppLog -Level 'WARN' -Message 'The VPN connection was lost.'
-                    }
-                    elseif ($script:ApplicationState -in @('Connecting', 'Disconnecting')) {
-                        Set-ApplicationState -State 'DisconnectedError'
-                    }
-                    elseif ($script:ApplicationState -ne 'DisconnectedError' -or
-                        (Test-StateDetailUncertain -Detail $script:StateDetail) -or
-                        $script:StateDetail -eq 'No network connection') {
-                        Set-ApplicationState -State 'InitialDisconnected'
-                    }
-                }
-            }
-        }
         'Connect' {
             $script:DisconnectDeadline = [DateTime]::MinValue
             $script:DisconnectReason = ''
@@ -3287,6 +3823,9 @@ function Stop-TrayApplication {
         if ($null -ne $script:ActiveOperation) {
             [void](Stop-ActiveCliOperation -Reason 'tray exit')
         }
+        if ($null -ne $script:CliNotificationListener) {
+            Stop-CliNotificationListener -Reason 'tray exit'
+        }
 
         if ($null -ne $script:NotifyIcon) {
             $script:NotifyIcon.Visible = $false
@@ -3318,6 +3857,8 @@ function Start-TrayApplication {
     $script:ApplicationState = 'InitialDisconnected'
     $script:StateDetail = ''
     $script:ActiveOperation = $null
+    $script:CliNotificationListener = $null
+    $script:NextCliNotificationListenerStart = [DateTime]::UtcNow
     $script:DisconnectDeadline = [DateTime]::MinValue
     $script:DisconnectReason = ''
     $script:SettingsForm = $null
@@ -3402,8 +3943,11 @@ function Start-TrayApplication {
     $script:PollTimer.Add_Tick({
         try {
             $now = [DateTime]::UtcNow
+            Update-CliNotificationListener -Now $now
+
             if ($null -ne $script:ActiveOperation) {
                 $operation = $script:ActiveOperation
+                $transport = [string](Get-ObjectPropertyValue -InputObject $operation -Name 'Transport' -DefaultValue 'Process')
 
                 if ($operation.Name -eq 'Connect' -and $now -ge $script:NextNetworkCheck) {
                     $script:NextNetworkCheck = $now.AddSeconds(5)
@@ -3416,7 +3960,19 @@ function Start-TrayApplication {
                 }
 
                 $elapsed = ($now - $operation.StartedAt).TotalSeconds
-                if ($elapsed -ge $operation.TimeoutSeconds) {
+                if ($transport -eq 'NotificationListener') {
+                    if ($operation.Completed) {
+                        $script:ActiveOperation = $null
+                        Complete-StatusQuery -State $operation.ReportedState -Succeeded $true -TimedOut $false
+                    }
+                    elseif ($elapsed -ge $operation.TimeoutSeconds) {
+                        $script:ActiveOperation = $null
+                        Stop-CliNotificationListener -Reason 'status timeout'
+                        $script:NextCliNotificationListenerStart = $now.AddSeconds(5)
+                        Complete-StatusQuery -State $null -Succeeded $false -TimedOut $true
+                    }
+                }
+                elseif ($elapsed -ge $operation.TimeoutSeconds) {
                     $script:ActiveOperation = $null
                     Complete-CliOperation -Operation $operation -TimedOut $true
                 }
@@ -3428,8 +3984,8 @@ function Start-TrayApplication {
                 }
             }
             elseif ($now -ge $script:NextStatusPoll) {
-                # Status is a local vpnagent query, so keep checking it even when
-                # the external route is down. Its own timeout keeps the UI bounded.
+                # Status is a local vpnagent query. Once connected, the persistent
+                # listener remains Cisco's registered CLI and receives modal errors.
                 $disconnectPending = $script:DisconnectDeadline -gt [DateTime]::MinValue
                 $script:NextStatusPoll = $now.AddSeconds(5)
                 $statusStarted = Start-CliOperation -Operation 'Status' -TimeoutSeconds 10
@@ -3442,7 +3998,17 @@ function Start-TrayApplication {
             $failedOperation = $script:ActiveOperation
             $script:ActiveOperation = $null
             if ($null -ne $failedOperation) {
-                Stop-CliProcess -Operation $failedOperation -Reason 'polling error'
+                $failedTransport = [string](Get-ObjectPropertyValue -InputObject $failedOperation -Name 'Transport' -DefaultValue 'Process')
+                if ($failedTransport -eq 'Process') {
+                    Stop-CliProcess -Operation $failedOperation -Reason 'polling error'
+                }
+                else {
+                    Stop-CliNotificationListener -Reason 'polling error'
+                }
+            }
+            if ($null -ne $script:CliNotificationListener) {
+                Stop-CliNotificationListener -Reason 'polling error'
+                $script:NextCliNotificationListenerStart = $now.AddSeconds(5)
             }
 
             Write-AppLog -Level 'ERROR' -Message ("Polling error: {0}" -f $_.Exception.Message)

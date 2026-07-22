@@ -61,7 +61,7 @@ foreach ($powerShellFile in (Get-ChildItem -LiteralPath $repositoryRoot -Recurse
 . $scriptPath
 Assert-Equal 'VPN CLI Tray' $script:ProductName 'the display product name must use the neutral application identity'
 Assert-Equal 'VpnCliTray' $script:AppId 'the per-user application ID must use the neutral identity'
-Assert-Equal '0.2.0' $script:Version 'the complete rename must be a minor release'
+Assert-Equal '0.2.1' $script:Version 'the notification-listener fix must be a patch release'
 Assert-True ($script:InstalledScriptPath.EndsWith('\VpnCliTray\VpnCliTray.ps1')) 'the install namespace and script name must be VpnCliTray'
 Assert-True ($script:LogPath.EndsWith('\VpnCliTray\VpnCliTray.log')) 'the log namespace and file name must be VpnCliTray'
 Assert-Equal 'AnyConnectTray' $script:LegacyAppId 'the former application ID must remain available only for migration'
@@ -107,6 +107,7 @@ Assert-Equal 'Connected' (Get-ConnectionStateFromText $statsOutput) 'the exact C
 Assert-Equal $null (Get-ConnectionStateFromText 'Management Connection State: Connected') 'management state must not be treated as tunnel state'
 Assert-Equal $null (Get-ConnectionStateFromText 'state: translated-or-unknown') 'unknown output must fail safely'
 Assert-Equal 'Reconnecting' (Get-ConnectionStateFromText '>> state: Reconnecting') 'Cisco reconnecting output must remain distinguishable'
+Assert-Equal 'Connected' (Get-ConnectionStateFromText 'VPN>   >> state: Connected') 'persistent response-mode prompts must not hide Cisco state events'
 
 $germanStateOutput = ">> state: Unbekannt`r`r`n>> state: Verbindung getrennt`r`r`n>> notice: Bereit zur Verbindung."
 Assert-Equal 'Disconnected' (Get-ConnectionStateFromText $germanStateOutput) 'German Secure Client state output must map to the canonical disconnected state'
@@ -202,6 +203,161 @@ Assert-Equal 'disconnect' (Get-VpnCliArguments -Operation 'Disconnect') 'disconn
 Assert-Equal $false (Test-VpnCliUsesStandardInput -Operation 'Status') 'the direct state command must not redirect standard input'
 Assert-Equal $true (Test-VpnCliUsesStandardInput -Operation 'Connect') 'response-file connect must receive credentials through standard input'
 Assert-Equal $false (Test-VpnCliUsesStandardInput -Operation 'Disconnect') 'the direct disconnect command must not be cancelled by closing redirected standard input'
+Assert-Equal '-s' (Get-VpnCliArguments -Operation 'NotificationListener') 'the persistent listener must use response mode so redirected state commands are processed'
+Assert-Equal $true (Test-VpnCliUsesStandardInput -Operation 'NotificationListener') 'the persistent listener must keep redirected input available'
+Assert-Equal 'NotificationListener' (Get-CliOperationTransport -Operation 'Status' -NotificationListenerAvailable $true -NotificationListenerRunning $true) 'connected status checks must reuse the registered listener'
+Assert-Equal 'Defer' (Get-CliOperationTransport -Operation 'Status' -NotificationListenerAvailable $false -NotificationListenerRunning $true) 'status polling must not launch a competing CLI while the listener registers'
+Assert-Equal 'Process' (Get-CliOperationTransport -Operation 'Status' -NotificationListenerAvailable $false -NotificationListenerRunning $false) 'status checks must retain the one-shot fallback before a listener exists'
+Assert-Equal 'Process' (Get-CliOperationTransport -Operation 'Connect' -NotificationListenerAvailable $true -NotificationListenerRunning $true) 'credentialed connects must remain one-shot operations'
+Assert-Equal 'Process' (Get-CliOperationTransport -Operation 'Disconnect' -NotificationListenerAvailable $true) 'verified disconnects must retain their bounded direct process'
+
+$listenerHealthStart = [DateTime]'2026-01-01T00:00:00Z'
+$savedCliNotificationListenerVariable = Get-Variable -Name 'CliNotificationListener' -Scope Script -ErrorAction SilentlyContinue
+$savedCliNotificationListener = if ($null -eq $savedCliNotificationListenerVariable) { $null } else { $savedCliNotificationListenerVariable.Value }
+try {
+    $script:CliNotificationListener = [pscustomobject]@{
+        Process              = [pscustomobject]@{ HasExited = $false }
+        Registered           = $false
+        ReadFailed           = $false
+        RegistrationDeadline = $listenerHealthStart.AddSeconds(10)
+    }
+    Assert-Equal $true (Test-CliNotificationListenerRunning) 'a live Cisco CLI process must count as an in-progress registration attempt'
+    Assert-Equal $false (Test-CliNotificationListenerAvailable) 'a live process must not be reused before Cisco confirms registration'
+    Assert-Equal $false (Test-CliNotificationListenerRegistrationTimedOut -Listener $script:CliNotificationListener -Now $listenerHealthStart.AddSeconds(9)) 'registration must retain its full handshake interval'
+    Assert-Equal $true (Test-CliNotificationListenerRegistrationTimedOut -Listener $script:CliNotificationListener -Now $listenerHealthStart.AddSeconds(10)) 'a listener that never registers must time out'
+    $script:CliNotificationListener.Registered = $true
+    Assert-Equal $true (Test-CliNotificationListenerAvailable) 'only a live registered listener may carry status queries'
+    Assert-Equal $false (Test-CliNotificationListenerRegistrationTimedOut -Listener $script:CliNotificationListener -Now $listenerHealthStart.AddSeconds(20)) 'successful registration must cancel the handshake timeout'
+    $script:CliNotificationListener.ReadFailed = $true
+    Assert-Equal $false (Test-CliNotificationListenerAvailable) 'a registered listener with a failed stream must not be reused'
+}
+finally {
+    if ($null -eq $savedCliNotificationListenerVariable) {
+        Remove-Variable -Name 'CliNotificationListener' -Scope Script -ErrorAction SilentlyContinue
+    }
+    else {
+        $script:CliNotificationListener = $savedCliNotificationListener
+    }
+}
+
+$capturedError = Get-CiscoCliNotificationFromLine 'VPN>   >> error: Session expired'
+Assert-Equal 'error' $capturedError.Kind 'listener error lines must be classified for logging'
+Assert-Equal 'Session expired' $capturedError.Message 'listener error text must exclude the Cisco prompt'
+Assert-Equal $null (Get-CiscoCliNotificationFromLine 'VPN>   >> state: Connected') 'state events must not be mistaken for notices'
+Assert-Equal $true (Test-CiscoCliRegistrationLine 'VPN>   >> registered with local VPN subsystem.') 'only Cisco''s exact positive acknowledgement may complete registration'
+Assert-Equal $false (Test-CiscoCliRegistrationLine 'VPN> not registered with local VPN subsystem') 'a negative registration line must not activate the listener'
+Assert-Equal $false (Test-CiscoCliRegistrationLine 'VPN>   >> error: not registered with local VPN subsystem') 'an error mentioning registration must not activate the listener'
+Assert-Equal $true (Test-CliNotificationListenerRequired -State 'Connected') 'a connected tunnel must retain the Cisco notification listener'
+Assert-Equal $true (Test-CliNotificationListenerRequired -State 'Connecting') 'Cisco reconnecting must retain the notification listener'
+Assert-Equal $true (Test-CliNotificationListenerRequired -State 'Disconnecting') 'Cisco terminal transitions must retain the listener for any trailing error'
+Assert-Equal $false (Test-CliNotificationListenerRequired -State 'InitialDisconnected') 'a disconnected tray must not keep an idle CLI process'
+
+$retentionStart = [DateTime]'2026-01-01T00:00:00Z'
+$retentionDeadline = $retentionStart.AddSeconds(5)
+Assert-Equal 'Keep' (Get-CliNotificationListenerRetentionAction -State 'Disconnecting' -Now $retentionStart -StopAfter ([DateTime]::MaxValue)) 'Cisco disconnecting must keep the notification channel registered'
+Assert-Equal 'StartGrace' (Get-CliNotificationListenerRetentionAction -State 'DisconnectedError' -Now $retentionStart -StopAfter ([DateTime]::MaxValue)) 'a terminal state must begin the trailing-error grace period'
+Assert-Equal 'Keep' (Get-CliNotificationListenerRetentionAction -State 'DisconnectedError' -Now $retentionStart.AddSeconds(4) -StopAfter $retentionDeadline) 'the listener must remain registered throughout the trailing-error grace period'
+Assert-Equal 'Stop' (Get-CliNotificationListenerRetentionAction -State 'DisconnectedError' -Now $retentionDeadline -StopAfter $retentionDeadline) 'the listener may stop after the trailing-error grace period'
+
+$listenerFixture = [pscustomobject]@{
+    Registered    = $true
+    StateSequence = [long]4
+    LastState     = $null
+}
+$script:ActiveOperation = [pscustomobject]@{
+    Transport            = 'NotificationListener'
+    MinimumStateSequence = [long]4
+    ReportedState        = $null
+    Completed            = $false
+}
+Assert-Equal $false (Test-CliNotificationStatusOperationSucceeded -Operation $script:ActiveOperation) 'an unfinished listener status query must not survive listener exit as success'
+Receive-CliNotificationListenerLine -Listener $listenerFixture -Line 'VPN>   >> state: Reconnecting'
+Assert-Equal 5 $listenerFixture.StateSequence 'each listener state event must advance its correlation sequence'
+Assert-Equal 'Reconnecting' $script:ActiveOperation.ReportedState 'a post-command listener state must complete with its canonical value'
+Assert-Equal $true $script:ActiveOperation.Completed 'a listener status query must complete without waiting for process exit'
+Assert-Equal $true (Test-CliNotificationStatusOperationSucceeded -Operation $script:ActiveOperation) 'a parsed state must remain successful even if the listener reaches EOF in the same drain'
+$script:ActiveOperation = $null
+
+$notificationTestDirectory = Join-Path ([IO.Path]::GetTempPath()) ('VpnCliTray.Notifications.' + [Guid]::NewGuid().ToString('N'))
+$savedNotificationInstallDirectory = $script:InstallDirectory
+$savedNotificationLogPath = $script:LogPath
+$savedNotificationStateVariable = Get-Variable -Name 'ApplicationState' -Scope Script -ErrorAction SilentlyContinue
+$savedNotificationDetailVariable = Get-Variable -Name 'StateDetail' -Scope Script -ErrorAction SilentlyContinue
+$savedNotificationIconVariable = Get-Variable -Name 'NotifyIcon' -Scope Script -ErrorAction SilentlyContinue
+$savedNotificationState = if ($null -eq $savedNotificationStateVariable) { $null } else { $savedNotificationStateVariable.Value }
+$savedNotificationDetail = if ($null -eq $savedNotificationDetailVariable) { $null } else { $savedNotificationDetailVariable.Value }
+$savedNotificationIcon = if ($null -eq $savedNotificationIconVariable) { $null } else { $savedNotificationIconVariable.Value }
+$savedNotificationOperation = $script:ActiveOperation
+try {
+    $script:InstallDirectory = $notificationTestDirectory
+    $script:LogPath = Join-Path $notificationTestDirectory 'VpnCliTray.log'
+    $script:ApplicationState = 'Connected'
+    $script:StateDetail = ''
+    $script:NotifyIcon = $null
+    $script:ActiveOperation = $null
+    $sequenceListener = [pscustomobject]@{
+        Registered    = $true
+        StateSequence = [long]0
+        LastState     = $null
+    }
+
+    Receive-CliNotificationListenerLine -Listener $sequenceListener -Line 'VPN>   >> state: Disconnecting'
+    Assert-Equal 'Disconnecting' $script:ApplicationState 'a Cisco disconnecting event must retain the listener on its own timer tick'
+    Assert-Equal 'Keep' (Get-CliNotificationListenerRetentionAction -State $script:ApplicationState -Now $retentionStart -StopAfter ([DateTime]::MaxValue)) 'the disconnecting tick must not retire the listener'
+
+    Receive-CliNotificationListenerLine -Listener $sequenceListener -Line 'VPN>   >> state: Disconnected'
+    Assert-Equal 'DisconnectedError' $script:ApplicationState 'the following disconnected event must become an unexpected terminal state'
+    Assert-Equal 'StartGrace' (Get-CliNotificationListenerRetentionAction -State $script:ApplicationState -Now $retentionStart -StopAfter ([DateTime]::MaxValue)) 'the disconnected tick must retain the listener for a trailing Cisco error'
+
+    $sensitiveCiscoMessage = 'Your connection to vpn.private.example for alice requires re-authentication.'
+    Receive-CliNotificationListenerLine -Listener $sequenceListener -Line ('VPN>   >> error: ' + $sensitiveCiscoMessage)
+    $notificationLog = [IO.File]::ReadAllText($script:LogPath)
+    Assert-True $notificationLog.Contains('Cisco CLI error received by the hidden notification listener.') 'a trailing Cisco error must be consumed by the registered listener'
+    Assert-True (-not $notificationLog.Contains($sensitiveCiscoMessage)) 'raw gateway error text must never enter the application log'
+
+    $disposedReader = New-Object IO.StringReader('VPN>   >> state: Connected')
+    $completedReadTask = $disposedReader.ReadLineAsync()
+    $disposedReader.Dispose()
+    $streamFailureListener = [pscustomobject]@{
+        OutputReader   = $disposedReader
+        OutputReadTask = $completedReadTask
+        ReadFailed     = $false
+        Registered     = $true
+        StateSequence  = [long]0
+        LastState      = $null
+    }
+    $script:ActiveOperation = [pscustomobject]@{
+        Transport            = 'NotificationListener'
+        MinimumStateSequence = [long]0
+        ReportedState        = $null
+        Completed            = $false
+    }
+    Receive-CliNotificationListenerStream -Listener $streamFailureListener -StreamName 'Output'
+    Assert-Equal $true $streamFailureListener.ReadFailed 'failure to schedule the next asynchronous read must retire the listener'
+    Assert-Equal $null $streamFailureListener.OutputReadTask 'a failed asynchronous-read reschedule must clear the stale completed task'
+    Assert-Equal 'Connected' $script:ActiveOperation.ReportedState 'a valid current line must be retained before a subsequent stream failure'
+    $script:ActiveOperation = $null
+}
+finally {
+    $script:InstallDirectory = $savedNotificationInstallDirectory
+    $script:LogPath = $savedNotificationLogPath
+    foreach ($variableRestore in @(
+        [pscustomobject]@{ Name = 'ApplicationState'; Variable = $savedNotificationStateVariable; Value = $savedNotificationState }
+        [pscustomobject]@{ Name = 'StateDetail'; Variable = $savedNotificationDetailVariable; Value = $savedNotificationDetail }
+        [pscustomobject]@{ Name = 'NotifyIcon'; Variable = $savedNotificationIconVariable; Value = $savedNotificationIcon }
+    )) {
+        if ($null -eq $variableRestore.Variable) {
+            Remove-Variable -Name $variableRestore.Name -Scope Script -ErrorAction SilentlyContinue
+        }
+        else {
+            Set-Variable -Name $variableRestore.Name -Scope Script -Value $variableRestore.Value
+        }
+    }
+    $script:ActiveOperation = $savedNotificationOperation
+    if (Test-Path -LiteralPath $notificationTestDirectory -PathType Container) {
+        [IO.Directory]::Delete($notificationTestDirectory, $true)
+    }
+}
 
 $inputWithoutBanner = New-VpnCliInput -VpnAddress 'vpn.example.com/group' -Username 'alice' -Password 'p@ss word' -AcceptLoginBanner $false
 Assert-Equal "connect vpn.example.com/group`r`nalice`r`np@ss word`r`n" $inputWithoutBanner 'connect input must preserve values and line order'

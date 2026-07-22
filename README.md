@@ -17,6 +17,7 @@ VPN CLI Tray is an independent, unofficial project. It is not affiliated with, s
 - Prevents duplicate tray instances for the same Windows user.
 - Detects when Cisco's own VPN UI has exclusive connect control and fails immediately with corrective guidance.
 - Polls Cisco's connection state without freezing the notification-area UI.
+- Keeps a hidden Cisco CLI listener attached while the tunnel is active, following Cisco's guidance for routing later gateway errors to the CLI instead of a standalone Windows dialog.
 - Stores the password with Windows DPAPI for the current user rather than as plaintext.
 - Automatically detects Secure Client 5.x before legacy AnyConnect 4.x, including after an in-place Cisco upgrade.
 
@@ -36,6 +37,10 @@ When Wi-Fi disappears, Cisco may remain in its `Reconnecting` state until a rout
 Before a new connection, the app compares Windows Network List Manager with the available physical default routes. It fails fast only when both independently report no network. If either probe is unavailable, the check fails open so unusual enterprise routing is not blocked.
 
 A user cancellation or connection timeout kills the waiting CLI process, sends Cisco's direct disconnect command, and verifies the final state. Settings remain disabled during that bounded cleanup so a save cannot race it. Exit remains available as an emergency escape, but **Cancel connection** is preferred because it verifies Cisco's final state.
+
+After Cisco reports `Connected` or `Reconnecting`, the app starts a hidden `vpncli.exe -s` response-mode listener and keeps its standard input open. It waits for Cisco to confirm registration with the local VPN subsystem; an unregistered process is retired and retried instead of being treated as protection. Periodic state checks then reuse that registered CLI. Cisco recommends restarting its CLI after connection so later gateway termination errors are delivered to the CLI rather than a standalone Windows popup. The listener remains through Cisco's terminal transition and a short trailing-error grace period, but is retired before a credentialed connect or intentional disconnect and on app exit. See [Cisco's CLI popup guidance](https://www.cisco.com/c/en/us/td/docs/security/vpn_client/anyconnect/Cisco-Secure-Client-5/admin/guide/b-cisco-secure-client-admin-guide-5-1/customize-localize-anyconnect.html).
+
+This listener is the client-side mitigation for the presentation problem; it cannot extend the VPN session. Cisco documents the technique for CLI-managed termination errors, but the exact idle-timeout dialog shown by every deployed client version still needs an end-to-end lock/sleep test. If sleep or network loss lasts beyond the lower of the gateway's idle timeout and remaining maximum session time, Cisco must create a new authenticated connection. `AutoReconnect` can recover only while that gateway session still exists. Extending those timers requires the VPN administrator; the tray does not generate artificial keepalive traffic or override security policy. See [Cisco's reconnect timeout explanation](https://www.cisco.com/c/en/us/support/docs/security/anyconnect-secure-mobility-client/116312-qanda-anyconnect-00.html).
 
 ## Requirements
 
@@ -76,7 +81,7 @@ The Pages workflow deploys `manage.ps1` only from the latest published stable re
 For a fixed release, pin both the manager asset and payload version:
 
 ```powershell
-& ([scriptblock]::Create((irm 'https://github.com/savidini/VpnCliTray/releases/download/v0.2.0/Manage-VpnCliTray.ps1'))) -Action Install -Version v0.2.0
+& ([scriptblock]::Create((irm 'https://github.com/savidini/VpnCliTray/releases/download/v0.2.1/Manage-VpnCliTray.ps1'))) -Action Install -Version v0.2.1
 ```
 
 The manager downloads `VpnCliTray.release.json` and `VpnCliTray.ps1` from GitHub Releases, limits download sizes, verifies the exact version, byte count, and SHA-256 hash, checks that the payload parses as PowerShell, and then invokes Windows PowerShell 5.1 from a temporary file. It never executes the application payload directly from memory. A hash obtained from the same server protects against corruption and inconsistent downloads, but not compromise of that server or repository. Use Authenticode signing and the manager's `-PublisherThumbprint` option when publisher authentication is required.
@@ -160,7 +165,7 @@ The password is encrypted using Windows Data Protection API through PowerShell's
 
 Credentials are sent to `vpncli.exe -s` through redirected standard input. They are not placed in process arguments, environment variables, temporary response files, the registry, or the application log.
 
-State checks and disconnects use Cisco's direct `vpncli.exe state` and `vpncli.exe disconnect` commands. Response-file mode is reserved for the credentialed connect flow; closing it immediately after a disconnect request can cancel the asynchronous disconnect on some AnyConnect versions.
+Before a tunnel exists, state checks use Cisco's direct `vpncli.exe state` command. While connected or reconnecting, state checks are sent through the persistent hidden response-mode listener so it remains registered for Cisco notifications. Intentional disconnects retire that listener and use the direct `vpncli.exe disconnect` command; closing a direct disconnect immediately can cancel the asynchronous operation on some AnyConnect versions.
 
 The optional **Append 'y'...** setting is intentionally off. Enable it only if the known gateway displays a login banner after the password. Cisco's response-file interface does not identify which yes/no question consumes a pre-supplied response, so it could otherwise accept an unexpected prompt.
 
@@ -183,7 +188,7 @@ Use a Cisco profile alias or `host/group` VPN address when that keeps the prompt
 
 ## Exit and uninstall
 
-**Exit** only stops the tray process. It does not disconnect an active VPN, delete settings, remove shortcuts, disable startup, or stop Cisco's agent. The app starts again at the next sign-in while **Start with Windows** remains checked.
+**Exit** stops the tray process and its hidden Cisco notification listener. It does not disconnect an active VPN, delete settings, remove shortcuts, disable startup, or stop Cisco's agent; Cisco may show its own dialogs after the listener exits. The app starts again at the next sign-in while **Start with Windows** remains checked.
 
 To uninstall, first choose **Exit**, then run:
 
@@ -229,7 +234,9 @@ Or run only the health check:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\VpnCliTray.ps1 -HealthCheck
 ```
 
-The health check prints JSON and calls only Cisco's `state` command. Diagnostic events are written to `%LOCALAPPDATA%\VpnCliTray\VpnCliTray.log`; raw Cisco output and credentials are never logged.
+The health check prints JSON and calls only Cisco's `state` command. Diagnostic events are written to `%LOCALAPPDATA%\VpnCliTray\VpnCliTray.log`. The listener records only that a Cisco error or notice was received; it does not log the message text, credentials, gateway values, or CLI transcripts.
+
+If a Cisco termination dialog still appears with version 0.2.1 or later, check the log for **Cisco CLI notification listener registered with the local VPN subsystem**. A “process started” entry alone is not proof that Cisco accepted the listener. Cisco also documents a machine-wide `SuppressModalDialogs` DWORD for administrators. On 64-bit Windows its Secure Client 5 key is `HKLM\SOFTWARE\Wow6432Node\Cisco\Cisco Secure Client`; the AnyConnect 4 key ends in `Cisco AnyConnect Secure Mobility Client`. The value data is ignored, but the value can hide other useful Cisco errors and requires elevation, so VPN CLI Tray deliberately never creates it. Cisco documents the registry option for an administrator-reset dialog rather than every timeout variant; test it with the deployed client version before relying on it.
 
 If a connect attempt says **Quit Cisco Secure Client, then retry**, fully exit Cisco's own Secure Client/AnyConnect UI from its notification-area icon; merely closing or minimizing its window is not enough. Cisco permits only one client application to own the connect capability at a time. Leave the Cisco VPN agent service running.
 
@@ -245,7 +252,7 @@ Support is provided on a best-effort basis through GitHub issues. This independe
 
 - The project deliberately does not redistribute Cisco icons or binaries. Generated colored status icons are used at runtime, while shortcuts may reference the locally installed `UI\csc_ui.exe` or legacy `vpnui.exe` icon.
 - The manager and documented install URLs target `savidini/VpnCliTray`; keep them aligned if the repository is ever transferred or renamed.
-- Pushing a tag such as `v0.2.0` runs both offline suites, requires the tag to match `$script:Version`, generates the release manifest, uploads the manager and application as draft assets, and then publishes the release.
+- Pushing a tag such as `v0.2.1` runs both offline suites, requires the tag to match `$script:Version`, generates the release manifest, uploads the manager and application as draft assets, and then publishes the release.
 - A successful Release workflow triggers the Pages workflow, which republishes the verified manager asset from GitHub's latest stable release at the short URL.
 - Protect `main` and restrict creation, update, and deletion of `v*` tags to trusted maintainers before enabling releases. The tag workflow deliberately runs release code with `contents: write`; a GitHub environment approval is an additional safeguard.
 - Enable immutable releases in the GitHub repository or organization settings so published tags and assets cannot be replaced.
