@@ -962,71 +962,15 @@
       text-align: center;
     }
 
-    .workflow {
-      padding-block: clamp(5rem, 10vw, 8.5rem);
-    }
-
-    .section-heading {
-      display: grid;
-      grid-template-columns: minmax(0, 0.8fr) minmax(18rem, 0.55fr);
-      gap: 3rem;
-      align-items: end;
-      margin-block-end: 3rem;
-    }
-
-    .section-heading h2 {
-      max-width: 12ch;
-      margin-block-end: 0;
-    }
-
-    .section-heading > p {
-      margin: 0;
-      color: var(--ink-soft);
-      text-wrap: pretty;
-    }
-
-    .workflow-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      border-block-start: 1px solid var(--line);
-    }
-
-    .workflow-card {
-      position: relative;
-      padding: 2rem 1.7rem 0 0;
-    }
-
-    .workflow-card + .workflow-card {
-      border-inline-start: 1px solid var(--line);
-      padding-inline-start: 1.7rem;
-    }
-
-    .step-number {
-      display: grid;
-      width: 2rem;
-      height: 2rem;
-      place-items: center;
-      margin-block-end: 1.5rem;
-      border-radius: 50%;
-      background: var(--accent-soft);
-      color: var(--accent);
-      font-size: 0.72rem;
-      font-weight: 850;
-    }
-
-    .workflow-card p {
-      margin: 0;
-      color: var(--ink-soft);
-      font-size: 0.9rem;
-      text-wrap: pretty;
+    .security-section {
+      padding-block: clamp(3rem, 7vw, 5.5rem);
     }
 
     .security-note {
       display: grid;
-      grid-template-columns: auto 1fr auto;
+      grid-template-columns: auto 1fr;
       gap: 1rem;
       align-items: center;
-      margin-block-start: 3rem;
       border: 1px solid var(--line);
       border-radius: 1rem;
       background: var(--surface-soft);
@@ -1056,121 +1000,6 @@
 
     .security-note strong {
       color: var(--ink);
-    }
-
-    .text-link {
-      display: inline-flex;
-      min-height: 2.75rem;
-      align-items: center;
-      gap: 0.35rem;
-      border-radius: 0.4rem;
-      color: var(--accent);
-      font-size: 0.84rem;
-      font-weight: 750;
-      white-space: nowrap;
-    }
-
-    .text-link svg {
-      width: 0.85rem;
-      height: 0.85rem;
-    }
-
-    .requirements-wrap {
-      border-block: 1px solid var(--line);
-      background: color-mix(in srgb, var(--surface-soft) 55%, transparent);
-    }
-
-    .requirements {
-      padding-block: clamp(5rem, 9vw, 7.5rem);
-    }
-
-    .requirements-grid {
-      display: grid;
-      grid-template-columns: minmax(16rem, 0.7fr) minmax(0, 1.3fr);
-      gap: clamp(2.5rem, 7vw, 6.5rem);
-    }
-
-    .requirements-intro p:not(.eyebrow) {
-      color: var(--ink-soft);
-    }
-
-    .requirement-list {
-      display: grid;
-      gap: 0.8rem;
-      margin: 1.8rem 0 0;
-      padding: 0;
-      list-style: none;
-    }
-
-    .requirement-list li {
-      display: grid;
-      grid-template-columns: 1.4rem 1fr;
-      gap: 0.65rem;
-      align-items: start;
-      color: var(--ink-soft);
-      font-size: 0.88rem;
-    }
-
-    .requirement-list svg {
-      width: 1.1rem;
-      height: 1.1rem;
-      margin-block-start: 0.16rem;
-      color: var(--accent);
-    }
-
-    .fit-grid {
-      display: grid;
-      gap: 1rem;
-    }
-
-    .fit-card {
-      border: 1px solid var(--line);
-      border-radius: 1rem;
-      background: var(--surface);
-      padding: 1.35rem;
-    }
-
-    .fit-card.warning {
-      border-color: var(--warning-line);
-      background: var(--warning-surface);
-    }
-
-    .fit-card-header {
-      display: flex;
-      align-items: center;
-      gap: 0.65rem;
-      margin-block-end: 0.55rem;
-    }
-
-    .fit-card-header svg {
-      width: 1.15rem;
-      height: 1.15rem;
-      flex: 0 0 auto;
-      color: var(--accent);
-    }
-
-    .fit-card.warning .fit-card-header svg,
-    .fit-card.warning h3 {
-      color: var(--warning);
-    }
-
-    .fit-card h3 {
-      margin: 0;
-    }
-
-    .fit-card p {
-      margin: 0;
-      color: var(--ink-soft);
-      font-size: 0.88rem;
-      text-wrap: pretty;
-    }
-
-    .fit-card.warning p {
-      color: var(--warning);
-    }
-
-    .fit-card a {
-      font-weight: 700;
     }
 
     .manager-callout {
@@ -1280,8 +1109,7 @@
 
     @media (max-width: 58rem) {
       .hero,
-      .showcase-grid,
-      .requirements-grid {
+      .showcase-grid {
         grid-template-columns: 1fr;
       }
 
@@ -1305,46 +1133,6 @@
         max-width: 24rem;
       }
 
-      .section-heading {
-        grid-template-columns: 1fr;
-        gap: 1rem;
-      }
-
-      .section-heading > p {
-        max-width: 38rem;
-      }
-
-      .workflow-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .workflow-card,
-      .workflow-card + .workflow-card {
-        border-inline-start: 0;
-        border-block-end: 1px solid var(--line);
-        padding: 1.5rem 0;
-      }
-
-      .workflow-card:first-child {
-        padding-block-start: 2rem;
-      }
-
-      .workflow-card:last-child {
-        border-block-end: 0;
-      }
-
-      .step-number {
-        margin-block-end: 1rem;
-      }
-
-      .security-note {
-        grid-template-columns: auto 1fr;
-      }
-
-      .security-note .text-link {
-        grid-column: 2;
-        justify-self: start;
-      }
     }
 
     @media (max-width: 43rem) {
@@ -1430,10 +1218,6 @@
         grid-template-columns: 1fr;
       }
 
-      .security-note .text-link {
-        grid-column: 1;
-      }
-
       .security-icon {
         display: none;
       }
@@ -1493,7 +1277,6 @@
 
       .install-card,
       .usage-frame,
-      .fit-card,
       .manager-callout,
       .security-note,
       .icon-button,
@@ -1516,7 +1299,6 @@
       <nav aria-label="Primary navigation">
         <ul class="nav-links">
           <li><a href="#how-it-works">How it works</a></li>
-          <li><a href="#requirements">Requirements</a></li>
         </ul>
       </nav>
       <div class="header-actions">
@@ -1538,7 +1320,7 @@
       <div class="hero-copy">
         <p class="eyebrow">For Windows 10 &amp; 11</p>
         <h1 id="hero-title">Your Cisco VPN, one click away.</h1>
-        <p class="lede">A tiny tray control for your existing Cisco Secure Client or AnyConnect installation. Save your details once, then connect with a click.</p>
+        <p class="lede">One-click tray control for your existing Cisco Secure Client or AnyConnect installation.</p>
         <ul class="trust-list" aria-label="Product qualities">
           <li><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 10 3 3 7-7"></path></svg>No admin</li>
           <li><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 10 3 3 7-7"></path></svg>Per-user</li>
@@ -1549,7 +1331,7 @@
       <div class="install-card">
         <p class="install-kicker">Install</p>
         <h2>One command to install.</h2>
-        <p class="install-instruction">Open <strong>Windows PowerShell</strong> as your normal user, paste this command, and press Enter.</p>
+        <p class="install-instruction">Open <strong>Windows PowerShell</strong> as your normal user, paste, and press Enter.</p>
         <div class="command-box">
           <pre tabindex="0" aria-label="PowerShell install command"><code id="install-command" translate="no">&amp; ([scriptblock]::Create((irm 'https://savidini.de/VpnCliTray/manage.ps1'))) -Action Install</code></pre>
           <button class="copy-button" id="copy-button" type="button" hidden>
@@ -1560,10 +1342,9 @@
         <p class="install-status" id="copy-status" role="status">Requires Windows PowerShell 5.1 and an existing Cisco VPN client.</p>
         <p class="install-meta">
           <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5 16 5v4.5c0 3.8-2.4 6.4-6 8-3.6-1.6-6-4.2-6-8V5l6-2.5Z"></path><path d="m7.2 10 1.8 1.8 3.8-4"></path></svg>
-          A fresh install adds a Start Menu shortcut, enables Start with Windows, and launches the tray. You can disable startup from its menu.
+          Adds a Start Menu shortcut, starts with Windows, and launches the tray.
         </p>
         <p class="install-review">
-          <span>This command runs the manager served from this HTTPS endpoint.</span>
           <a href="./manage.ps1">Review source</a>
           <a href="./manage.ps1.sha256">SHA-256</a>
         </p>
@@ -1575,18 +1356,18 @@
         <div class="section-copy">
           <p class="eyebrow">Everyday use</p>
           <h2 id="usage-title">The whole app, at a glance.</h2>
-          <p>It lives in the Windows notification area—no dashboard and no window to keep open.</p>
+          <p>Tray-only—no dashboard or open window.</p>
           <ul class="interaction-list">
             <li>
               <span class="interaction-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 2.5h7a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-7a3 3 0 0 1-3-3v-9a3 3 0 0 1 3-3Z"></path><path d="M10 2.5v5M3.5 8h13"></path></svg></span>
-              <span><strong>Left-click</strong><span>Connect, disconnect, or cancel a connection in progress.</span></span>
+              <span><strong>Left-click</strong><span>Connect, disconnect, or cancel.</span></span>
             </li>
             <li>
               <span class="interaction-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 2.5h7a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-7a3 3 0 0 1-3-3v-9a3 3 0 0 1 3-3Z"></path><path d="M10 2.5v5M3.5 8h13"></path><circle cx="13.1" cy="5.2" r=".8" fill="currentColor" stroke="none"></circle></svg></span>
-              <span><strong>Right-click</strong><span>See status, change settings, manage startup, or exit.</span></span>
+              <span><strong>Right-click</strong><span>Status, settings, startup, and exit.</span></span>
             </li>
           </ul>
-          <p class="state-heading">The dot tells the story</p>
+          <p class="state-heading">Dot status</p>
           <ul class="state-list">
             <li><span class="state-dot state-grey"></span>Grey · Disconnected</li>
             <li><span class="state-dot state-amber"></span>Amber · Connecting / disconnecting</li>
@@ -1618,64 +1399,27 @@
               </div>
             </div>
           </div>
-          <figcaption id="usage-caption">Stylized preview of the connected tray menu; labels match the app.</figcaption>
+          <figcaption id="usage-caption">Connected tray menu.</figcaption>
         </figure>
       </div>
     </section>
 
-    <section class="workflow shell" aria-labelledby="workflow-title">
-      <div class="section-heading">
-        <div><p class="eyebrow">How it works</p><h2 id="workflow-title">From paste to connected.</h2></div>
-        <p>A lightweight wrapper around Cisco’s own command-line client. Cisco still owns the tunnel, agent, profiles, and policy.</p>
-      </div>
-      <div class="workflow-grid">
-        <article class="workflow-card"><span class="step-number" aria-hidden="true">01</span><h3>Release checks</h3><p>The manager validates the release manifest structure, then checks the app’s size, SHA-256, version, and PowerShell syntax before installing under <code translate="no">%LOCALAPPDATA%</code>.</p></article>
-        <article class="workflow-card"><span class="step-number" aria-hidden="true">02</span><h3>Set up once</h3><p>First launch detects <code translate="no">vpncli.exe</code> and asks for your VPN address or profile, username, and password.</p></article>
-        <article class="workflow-card"><span class="step-number" aria-hidden="true">03</span><h3>Click to connect</h3><p>The app passes your saved details to Cisco’s CLI over redirected input, then keeps the tray state in sync.</p></article>
-      </div>
+    <section class="security-section shell" aria-label="Credential security">
       <aside class="security-note" aria-label="Credential security">
         <span class="security-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="12" height="9" rx="2"></rect><path d="M6.5 8V6a3.5 3.5 0 0 1 7 0v2M10 11.5v2"></path></svg></span>
-        <p><strong>Your password is protected with Windows DPAPI for your user.</strong> It is not put in process arguments, environment variables, temporary response files, the registry, or the app log. DPAPI protects a copied settings file, but not against code already running as your user.</p>
-        <a class="text-link" href="https://github.com/savidini/VpnCliTray/blob/main/SECURITY.md" rel="noopener noreferrer">Security model<svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7 5 5 5-5 5"></path></svg></a>
+        <p><strong>Your password is protected with Windows DPAPI for your user.</strong></p>
       </aside>
     </section>
 
-    <div class="requirements-wrap">
-      <section class="requirements shell" id="requirements" aria-labelledby="requirements-title">
-        <div class="requirements-grid">
-          <div class="requirements-intro">
-            <p class="eyebrow">Before you start</p>
-            <h2 id="requirements-title">A small app with a clear fit.</h2>
-            <p><span translate="no">VPN CLI Tray</span> complements an existing Cisco installation. It does not install or reconfigure Cisco software.</p>
-            <ul class="requirement-list">
-              <li><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 10 3 3 7-7"></path></svg><span>Windows 10 or Windows 11</span></li>
-              <li><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 10 3 3 7-7"></path></svg><span>Windows PowerShell 5.1</span></li>
-              <li><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 10 3 3 7-7"></path></svg><span>Cisco Secure Client 5.x or AnyConnect 4.x with <code translate="no">vpncli.exe</code> and its VPN agent running</span></li>
-            </ul>
-          </div>
-          <div class="fit-grid">
-            <aside class="fit-card warning" aria-labelledby="cisco-ui-title">
-              <div class="fit-card-header"><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5 18 17H2L10 2.5Z"></path><path d="M10 7v4.2M10 14h.01"></path></svg><h3 id="cisco-ui-title">Exit Cisco’s VPN UI first</h3></div>
-              <p>Fully exit it from the notification area—not just close or minimize the window—because Cisco allows only one app to control connections. Keep Cisco’s VPN agent service running.</p>
-            </aside>
-            <aside class="fit-card" aria-labelledby="auth-fit-title">
-              <div class="fit-card-header"><svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="7.5"></circle><path d="M10 9.2V14M10 6h.01"></path></svg><h3 id="auth-fit-title">Check your authentication flow</h3></div>
-              <p>It is designed for the conventional address → username → password sequence. Out-of-band push may work depending on the gateway; browser SAML or Entra ID, changing OTPs, certificate selection, untrusted-certificate confirmation, pre-credential group menus, and arbitrary policy questions generally do not. <a href="https://github.com/savidini/VpnCliTray#authentication-limitations" rel="noopener noreferrer">See all limitations</a>.</p>
-            </aside>
-          </div>
-        </div>
-      </section>
-    </div>
-
     <section class="manager-callout shell" aria-labelledby="manager-title">
-      <div><p class="install-kicker">Later</p><h2 id="manager-title">One manager for the full lifecycle.</h2><p>Run the same command without <code translate="no">-Action Install</code> to open a menu for install or update, installation status, and uninstall. After updating a running tray, exit and reopen it to load the new version. Exit before uninstalling; uninstall removes saved settings and logs.</p></div>
+      <div><p class="install-kicker">Later</p><h2 id="manager-title">Install, update, or uninstall.</h2><p>Run the same command without <code translate="no">-Action Install</code> to open the manager menu.</p></div>
       <a class="primary-link" href="https://github.com/savidini/VpnCliTray#quick-install-update-or-uninstall" rel="noopener noreferrer">View manager options<svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7 5 5 5-5 5"></path></svg></a>
     </section>
   </main>
 
   <footer class="site-footer">
     <div class="footer-top shell">
-      <p class="footer-copy"><span translate="no">VPN CLI Tray</span> is MIT licensed and independent. It is not affiliated with, sponsored by, or endorsed by Cisco.</p>
+      <p class="footer-copy">MIT licensed. Not affiliated with or endorsed by Cisco.</p>
       <nav aria-label="Project links">
         <ul class="footer-links">
           <li><a href="https://github.com/savidini/VpnCliTray#readme" rel="noopener noreferrer">Documentation</a></li>
