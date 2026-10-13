@@ -6,13 +6,13 @@ Security fixes are provided for the latest published release. Older releases are
 
 ## Credential model
 
-VPN CLI Tray stores the VPN password as a current-user DPAPI ciphertext in `%LOCALAPPDATA%\VpnCliTray\settings.json`. It sends decrypted credentials through redirected standard input only to `vpncli.exe` detected in Cisco's standard Program Files installation locations. User-writable and arbitrary configured executable paths are rejected.
+TrayTunnel stores the VPN password as a current-user DPAPI ciphertext in `%LOCALAPPDATA%\TrayTunnel\settings.json`. It sends decrypted credentials through redirected standard input only to `vpncli.exe` detected in Cisco's standard Program Files installation locations. User-writable and arbitrary configured executable paths are rejected.
 
 The application rejects carriage returns, line feeds, and NUL characters in all response-file values. This prevents a configured address, username, or password from injecting extra Cisco CLI commands.
 
 DPAPI is not a defense against code already running as the same Windows user. Such code may be able to ask Windows to decrypt the stored value. Corporate endpoint controls and VPN credential policies still apply.
 
-The one-time migration from AnyConnect Tray copies and verifies only a recognized schema-version-1 settings document, without exposing plaintext or overwriting an existing valid VPN CLI Tray settings file. Unrecognized or invalid legacy files are preserved. The copied DPAPI ciphertext remains decryptable only in the same Windows user context under normal conditions.
+Migration from VPN CLI Tray or AnyConnect Tray copies and verifies only a recognized schema-version-1 settings document, without exposing plaintext or overwriting an existing valid TrayTunnel settings file. All three application identities are locked during migration and uninstall. Unrecognized or invalid legacy files are preserved. The copied DPAPI ciphertext remains decryptable only in the same Windows user context under normal conditions.
 
 ## Login-banner acceptance
 
@@ -36,7 +36,7 @@ The manager invokes `powershell.exe -ExecutionPolicy Bypass` only for its child 
 
 ## Reporting a vulnerability
 
-Report vulnerabilities privately through [GitHub private vulnerability reporting](https://github.com/savidini/VpnCliTray/security/advisories/new). Include the affected version, security impact, reproduction steps, and a sanitized proof of concept when available.
+Report vulnerabilities privately through [GitHub private vulnerability reporting](https://github.com/savidini/TrayTunnel/security/advisories/new). Include the affected version, security impact, reproduction steps, and a sanitized proof of concept when available.
 
 Do not include real VPN addresses, usernames, passwords, certificates, CLI transcripts, or employer-specific configuration in a public issue or report. Redact organization-specific values before submitting anything.
 

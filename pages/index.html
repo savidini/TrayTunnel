@@ -4,23 +4,23 @@
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; upgrade-insecure-requests">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Install VPN CLI Tray, a tiny Windows notification-area controller for Cisco Secure Client and legacy AnyConnect.">
+  <meta name="description" content="Install TrayTunnel, a tiny Windows notification-area controller for Cisco Secure Client and legacy AnyConnect.">
   <meta name="referrer" content="no-referrer">
   <meta name="color-scheme" content="light dark">
   <meta id="theme-color-light" name="theme-color" content="#f4f6f1" media="(prefers-color-scheme: light)">
   <meta id="theme-color-dark" name="theme-color" content="#0d100e" media="(prefers-color-scheme: dark)">
-  <meta property="og:title" content="VPN CLI Tray — One-click Cisco VPN for Windows">
+  <meta property="og:title" content="TrayTunnel - One-click Cisco VPN for Windows">
   <meta property="og:description" content="Connect and disconnect an existing Cisco VPN from one small Windows tray icon.">
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://savidini.de/VpnCliTray/">
-  <meta property="og:site_name" content="VPN CLI Tray">
-  <title>VPN CLI Tray — One-click Cisco VPN for Windows</title>
-  <link rel="canonical" href="https://savidini.de/VpnCliTray/">
+  <meta property="og:url" content="https://savidini.de/TrayTunnel/">
+  <meta property="og:site_name" content="TrayTunnel">
+  <title>TrayTunnel - One-click Cisco VPN for Windows</title>
+  <link rel="canonical" href="https://savidini.de/TrayTunnel/">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23151a17'/%3E%3Ccircle cx='32' cy='32' r='13' fill='%23b1cb21' stroke='%23eef6bd' stroke-width='3'/%3E%3C/svg%3E">
   <script>
     (() => {
       try {
-        const theme = localStorage.getItem('vpn-cli-tray-theme');
+        const theme = localStorage.getItem('traytunnel-theme');
         if (theme !== 'light' && theme !== 'dark') return;
 
         document.documentElement.dataset.theme = theme;
@@ -1291,9 +1291,9 @@
   <a class="skip-link" href="#main-content">Skip to main content</a>
 
   <header class="site-header shell">
-    <a class="brand" href="#top" aria-label="VPN CLI Tray home">
+    <a class="brand" href="#top" aria-label="TrayTunnel home">
       <span class="brand-mark" aria-hidden="true"><span class="brand-dot"></span></span>
-      <span class="brand-name" translate="no">VPN CLI Tray</span>
+      <span class="brand-name" translate="no">TrayTunnel</span>
     </a>
 
     <div class="site-nav">
@@ -1303,7 +1303,7 @@
         </ul>
       </nav>
       <div class="header-actions">
-        <a class="github-link" href="https://github.com/savidini/VpnCliTray" rel="noopener noreferrer">
+        <a class="github-link" href="https://github.com/savidini/TrayTunnel" rel="noopener noreferrer">
           <span>GitHub</span>
           <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M8 7h9v9"></path></svg>
         </a>
@@ -1334,7 +1334,7 @@
         <h2>One command to install.</h2>
         <p class="install-instruction">Open <strong>Windows PowerShell</strong> as your normal user, paste, and press Enter.</p>
         <div class="command-box">
-          <pre tabindex="0" aria-label="PowerShell install command"><code id="install-command" translate="no">&amp; ([scriptblock]::Create((irm 'https://savidini.de/VpnCliTray/manage.ps1'))) -Action Install</code></pre>
+          <pre tabindex="0" aria-label="PowerShell install command"><code id="install-command" translate="no">&amp; ([scriptblock]::Create((irm 'https://savidini.de/TrayTunnel/manage.ps1'))) -Action Install</code></pre>
           <button class="copy-button" id="copy-button" type="button" hidden>
             <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="9" height="9" rx="2"></rect><path d="M13 7V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h1"></path></svg>
             <span id="copy-label">Copy</span>
@@ -1357,7 +1357,7 @@
         <div class="section-copy">
           <p class="eyebrow">Everyday use</p>
           <h2 id="usage-title">The whole app, at a glance.</h2>
-          <p>Tray-only—no dashboard or open window.</p>
+          <p>Tray icon only, with no dashboard or open window.</p>
           <ul class="interaction-list">
             <li>
               <span class="interaction-icon" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 2.5h7a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-7a3 3 0 0 1-3-3v-9a3 3 0 0 1 3-3Z"></path><path d="M10 2.5v5M3.5 8h13"></path></svg></span>
@@ -1414,7 +1414,7 @@
 
     <section class="manager-callout shell" aria-labelledby="manager-title">
       <div><p class="install-kicker">Later</p><h2 id="manager-title">Install, update, or uninstall.</h2><p>Run the same command without <code translate="no">-Action Install</code> to open the manager menu.</p></div>
-      <a class="primary-link" href="https://github.com/savidini/VpnCliTray#quick-install-update-or-uninstall" rel="noopener noreferrer">View manager options<svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7 5 5 5-5 5"></path></svg></a>
+      <a class="primary-link" href="https://github.com/savidini/TrayTunnel#quick-install-update-or-uninstall" rel="noopener noreferrer">View manager options<svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7 5 5 5-5 5"></path></svg></a>
     </section>
   </main>
 
@@ -1423,11 +1423,11 @@
       <p class="footer-copy">MIT licensed. Not affiliated with or endorsed by Cisco.</p>
       <nav aria-label="Project links">
         <ul class="footer-links">
-          <li><a href="https://github.com/savidini/VpnCliTray#readme" rel="noopener noreferrer">Documentation</a></li>
-          <li><a href="https://github.com/savidini/VpnCliTray/releases/latest" rel="noopener noreferrer">Latest release</a></li>
+          <li><a href="https://github.com/savidini/TrayTunnel#readme" rel="noopener noreferrer">Documentation</a></li>
+          <li><a href="https://github.com/savidini/TrayTunnel/releases/latest" rel="noopener noreferrer">Latest release</a></li>
           <li><a href="./manage.ps1">Manager source</a></li>
           <li><a href="./manage.ps1.sha256">Checksum</a></li>
-          <li><a href="https://github.com/savidini/VpnCliTray/blob/main/LICENSE" rel="noopener noreferrer">License</a></li>
+          <li><a href="https://github.com/savidini/TrayTunnel/blob/main/LICENSE" rel="noopener noreferrer">License</a></li>
         </ul>
       </nav>
     </div>
@@ -1454,7 +1454,7 @@
         lightThemeColor.media = theme === 'light' ? 'all' : 'not all';
         darkThemeColor.media = theme === 'dark' ? 'all' : 'not all';
         try {
-          localStorage.setItem('vpn-cli-tray-theme', theme);
+          localStorage.setItem('traytunnel-theme', theme);
         } catch {
           // The selected theme still applies for this page view.
         }

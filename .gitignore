@@ -1,12 +1,16 @@
 # Local runtime artifacts (the installed application normally stores these elsewhere)
 settings.json
+TrayTunnel.log
+TrayTunnel.log.old
+settings.*.tmp
+TrayTunnel.install.*.tmp
+TrayTunnel.install.*.bak
+
+# Exact historical names retained for migration cleanup
 VpnCliTray.log
 VpnCliTray.log.old
-settings.*.tmp
 VpnCliTray.install.*.tmp
 VpnCliTray.install.*.bak
-
-# Exact legacy names retained for one-time AnyConnect Tray migration cleanup
 AnyConnectTray.log
 AnyConnectTray.log.old
 AnyConnectTray.install.*.tmp

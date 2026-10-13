@@ -34,24 +34,26 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$script:ProductName = 'VPN CLI Tray'
-$script:AppId = 'VpnCliTray'
-$script:Version = '0.2.1'
+$script:ProductName = 'TrayTunnel'
+$script:AppId = 'TrayTunnel'
+$script:Version = '0.3.0'
 $script:SettingsSchemaVersion = 1
 $script:RunKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $script:LocalAppData = [Environment]::GetFolderPath('LocalApplicationData')
 $script:InstallDirectory = Join-Path $script:LocalAppData $script:AppId
-$script:InstalledScriptPath = Join-Path $script:InstallDirectory 'VpnCliTray.ps1'
+$script:InstalledScriptPath = Join-Path $script:InstallDirectory 'TrayTunnel.ps1'
 $script:SettingsPath = Join-Path $script:InstallDirectory 'settings.json'
-$script:LogPath = Join-Path $script:InstallDirectory 'VpnCliTray.log'
+$script:LogPath = Join-Path $script:InstallDirectory 'TrayTunnel.log'
 $script:SettingsMenuItem = $null
+$script:CompanyNetworkDetected = $false
+$script:NextCompanyNetworkCheck = [DateTime]::MinValue
+$script:NextCompanyDisconnectAttempt = [DateTime]::MinValue
 $script:MutexLease = $null
 $script:ExitMenuItem = $null
-$script:StartMenuShortcutPath = Join-Path ([Environment]::GetFolderPath('Programs')) 'VPN CLI Tray.lnk'
-$script:DesktopShortcutPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'VPN CLI Tray.lnk'
+$script:StartMenuShortcutPath = Join-Path ([Environment]::GetFolderPath('Programs')) 'TrayTunnel.lnk'
+$script:DesktopShortcutPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'TrayTunnel.lnk'
 
-# These exact legacy identifiers are intentionally retained for the one-time
-# migration from releases that predate the neutral application name.
+# Exact historical identifiers are used only to recognize and migrate old installs.
 $script:LegacyAppId = 'AnyConnectTray'
 $script:LegacyInstallDirectory = Join-Path $script:LocalAppData $script:LegacyAppId
 $script:LegacyInstalledScriptPath = Join-Path $script:LegacyInstallDirectory 'AnyConnectTray.ps1'
@@ -162,6 +164,10 @@ function Get-MutexName {
 
 function Get-LegacyMutexName {
     return Get-UserMutexName -ApplicationId $script:LegacyAppId
+}
+
+function Get-AppMutexNames {
+    return @((Get-MutexName), (Get-UserMutexName -ApplicationId 'VpnCliTray'), (Get-LegacyMutexName))
 }
 
 function Get-TrustedProgramFilesRoots {
@@ -482,6 +488,8 @@ function New-DefaultSettings {
         Username          = $defaults.Username
         PasswordEncrypted = ''
         AcceptLoginBanner = $false
+        AutoDisconnectOnCompanyNetwork = $false
+        CompanyDnsSuffix  = ''
         VpnCliPath        = if ($null -eq $vpnCliPath) { '' } else { $vpnCliPath }
         Configured        = $false
         LoadError         = ''
@@ -521,6 +529,10 @@ function Read-AppSettings {
         $settings.PasswordEncrypted = [string](Get-ObjectPropertyValue -InputObject $stored -Name 'PasswordEncrypted' -DefaultValue '')
         $storedBannerValue = Get-ObjectPropertyValue -InputObject $stored -Name 'AcceptLoginBanner' -DefaultValue $false
         $settings.AcceptLoginBanner = if ($storedBannerValue -is [bool]) { $storedBannerValue } else { $false }
+        $storedAutoDisconnect = Get-ObjectPropertyValue -InputObject $stored -Name 'AutoDisconnectOnCompanyNetwork' -DefaultValue $false
+        $settings.CompanyDnsSuffix = ConvertTo-CompanyDnsSuffix -Value ([string](Get-ObjectPropertyValue -InputObject $stored -Name 'CompanyDnsSuffix' -DefaultValue ''))
+        $settings.AutoDisconnectOnCompanyNetwork = $storedAutoDisconnect -is [bool] -and $storedAutoDisconnect -and
+            -not [string]::IsNullOrEmpty($settings.CompanyDnsSuffix)
         $storedVpnCliPath = [string](Get-ObjectPropertyValue -InputObject $stored -Name 'VpnCliPath' -DefaultValue '')
         $resolveParameters = @{ ConfiguredPath = $storedVpnCliPath }
         if ($PSBoundParameters.ContainsKey('ProgramFilesRoots')) {
@@ -535,6 +547,7 @@ function Read-AppSettings {
     catch {
         $settings.LoadError = 'The settings file could not be read. Open Settings and save it again.'
         $settings.Configured = $false
+        $settings.AutoDisconnectOnCompanyNetwork = $false
     }
 
     return $settings
@@ -546,6 +559,13 @@ function Save-AppSettings {
         [object]$Settings
     )
 
+    $companyDnsSuffix = ConvertTo-CompanyDnsSuffix -Value ([string](Get-ObjectPropertyValue -InputObject $Settings -Name 'CompanyDnsSuffix' -DefaultValue ''))
+    $autoDisconnect = Get-ObjectPropertyValue -InputObject $Settings -Name 'AutoDisconnectOnCompanyNetwork' -DefaultValue $false
+    $autoDisconnect = $autoDisconnect -is [bool] -and $autoDisconnect
+    if ($autoDisconnect -and [string]::IsNullOrEmpty($companyDnsSuffix)) {
+        throw 'Enter a company DNS suffix to enable automatic disconnect.'
+    }
+
     if (-not (Test-Path -LiteralPath $script:InstallDirectory -PathType Container)) {
         New-Item -ItemType Directory -Path $script:InstallDirectory -Force | Out-Null
     }
@@ -556,6 +576,8 @@ function Save-AppSettings {
         Username          = [string]$Settings.Username
         PasswordEncrypted = [string]$Settings.PasswordEncrypted
         AcceptLoginBanner = [bool]$Settings.AcceptLoginBanner
+        AutoDisconnectOnCompanyNetwork = $autoDisconnect
+        CompanyDnsSuffix  = $companyDnsSuffix
         VpnCliPath        = [string]$Settings.VpnCliPath
     }
 
@@ -680,10 +702,27 @@ function Test-NetworkEvidenceAvailable {
     return [bool]$InternetConnected -or [bool]$PhysicalRouteAvailable
 }
 
-function Test-NetworkInterfaceSnapshotAvailable {
+function ConvertTo-CompanyDnsSuffix {
+    param([AllowEmptyString()][string]$Value = '')
+
+    $suffix = $Value.Trim().ToLowerInvariant()
+    if ($suffix.EndsWith('.')) {
+        $suffix = $suffix.Substring(0, $suffix.Length - 1)
+    }
+    if ([string]::IsNullOrEmpty($suffix) -and [string]::IsNullOrWhiteSpace($Value)) {
+        return ''
+    }
+    if ($suffix.Length -gt 253 -or
+        $suffix -notmatch '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$') {
+        throw 'Enter a valid DNS suffix, such as office.example.com, without wildcards or spaces.'
+    }
+    return $suffix
+}
+
+function Test-PhysicalNetworkInterfaceUp {
     param(
         [AllowNull()]
-        [object[]]$Snapshots
+        [object]$Snapshot
     )
 
     $eligibleTypes = @(
@@ -699,15 +738,21 @@ function Test-NetworkInterfaceSnapshotAvailable {
     )
     $virtualPattern = '(?i)(Cisco|AnyConnect|Secure Client|Tailscale|Hyper-V|vSwitch|Virtual|VPN|TAP|Wintun|WireGuard|Mullvad|Npcap|WFP|QoS|Packet Scheduler)'
 
-    foreach ($snapshot in @($Snapshots)) {
-        if ($null -eq $snapshot -or
-            [string]$snapshot.OperationalStatus -ne 'Up' -or
-            [string]$snapshot.NetworkInterfaceType -notin $eligibleTypes) {
-            continue
-        }
+    if ($null -eq $Snapshot -or
+        [string]$Snapshot.OperationalStatus -ne 'Up' -or
+        [string]$Snapshot.NetworkInterfaceType -notin $eligibleTypes) {
+        return $false
+    }
 
-        $identity = '{0} {1}' -f [string]$snapshot.Name, [string]$snapshot.Description
-        if ($identity -match $virtualPattern) {
+    $identity = '{0} {1}' -f [string]$Snapshot.Name, [string]$Snapshot.Description
+    return $identity -notmatch $virtualPattern
+}
+
+function Test-NetworkInterfaceSnapshotAvailable {
+    param([AllowNull()][object[]]$Snapshots)
+
+    foreach ($snapshot in @($Snapshots)) {
+        if (-not (Test-PhysicalNetworkInterfaceUp -Snapshot $snapshot)) {
             continue
         }
 
@@ -723,6 +768,38 @@ function Test-NetworkInterfaceSnapshotAvailable {
     return $false
 }
 
+function Test-CompanyNetworkSnapshot {
+    param(
+        [AllowNull()][object[]]$Snapshots,
+        [AllowEmptyString()][string]$DnsSuffix
+    )
+
+    try {
+        $expectedSuffix = ConvertTo-CompanyDnsSuffix -Value $DnsSuffix
+    }
+    catch {
+        return $false
+    }
+    if ([string]::IsNullOrEmpty($expectedSuffix)) {
+        return $false
+    }
+    foreach ($snapshot in @($Snapshots)) {
+        if (-not (Test-PhysicalNetworkInterfaceUp -Snapshot $snapshot)) {
+            continue
+        }
+        try {
+            $actualSuffix = ConvertTo-CompanyDnsSuffix -Value ([string](Get-ObjectPropertyValue -InputObject $snapshot -Name 'DnsSuffix' -DefaultValue ''))
+        }
+        catch {
+            continue
+        }
+        if ($actualSuffix -eq $expectedSuffix) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Get-NetworkInterfaceSnapshot {
     $snapshots = foreach ($networkInterface in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
         try {
@@ -732,6 +809,7 @@ function Get-NetworkInterfaceSnapshot {
                 Description          = [string]$networkInterface.Description
                 OperationalStatus    = [string]$networkInterface.OperationalStatus
                 NetworkInterfaceType = [string]$networkInterface.NetworkInterfaceType
+                DnsSuffix            = [string]$properties.DnsSuffix
                 GatewayAddresses     = @(
                     $properties.GatewayAddresses |
                         ForEach-Object { [string]$_.Address }
@@ -861,7 +939,7 @@ function Get-ConnectionStateFromText {
 function Get-TrayActionKind {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('InitialDisconnected', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
+        [ValidateSet('InitialDisconnected', 'CompanyNetwork', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
         [string]$State,
 
         [AllowEmptyString()]
@@ -873,6 +951,9 @@ function Get-TrayActionKind {
         [string]$StateDetail = ''
     )
 
+    if ($State -eq 'CompanyNetwork') {
+        return 'Ignore'
+    }
     if ($State -eq 'DisconnectedError' -and (Test-StateDetailUncertain -Detail $StateDetail)) {
         return 'Ignore'
     }
@@ -901,7 +982,7 @@ function Get-TrayActionKind {
 function Test-TraySettingsEnabled {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('InitialDisconnected', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
+        [ValidateSet('InitialDisconnected', 'CompanyNetwork', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
         [string]$State
     )
 
@@ -911,7 +992,7 @@ function Test-TraySettingsEnabled {
 function Test-SettingsSaveAllowed {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('InitialDisconnected', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
+        [ValidateSet('InitialDisconnected', 'CompanyNetwork', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
         [string]$State,
 
         [AllowEmptyString()]
@@ -940,7 +1021,7 @@ function Test-StateDetailUncertain {
 function Get-TrayPresentation {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('InitialDisconnected', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
+        [ValidateSet('InitialDisconnected', 'CompanyNetwork', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
         [string]$State,
 
         [AllowEmptyString()]
@@ -950,6 +1031,9 @@ function Get-TrayPresentation {
     $presentation = switch ($State) {
         'InitialDisconnected' {
             [ordered]@{ Color = '#7A7A7A'; Status = 'Disconnected'; Action = 'Connect' }
+        }
+        'CompanyNetwork' {
+            [ordered]@{ Color = '#7A7A7A'; Status = 'Company network; VPN off'; Action = 'VPN not needed' }
         }
         'Connecting' {
             [ordered]@{ Color = '#F5A623'; Status = 'Connecting'; Action = 'Cancel connection' }
@@ -1094,7 +1178,7 @@ function New-AppShortcut {
         $shortcut.TargetPath = Get-WindowsPowerShellPath
         $shortcut.Arguments = Get-AppArguments -ScriptPath $ScriptPath
         $shortcut.WorkingDirectory = Split-Path -Parent $ScriptPath
-        $shortcut.Description = 'Start the VPN CLI Tray application'
+        $shortcut.Description = 'Start the TrayTunnel application'
 
         $iconPath = Resolve-CiscoIconPath
         if ($null -ne $iconPath) {
@@ -1150,7 +1234,7 @@ function Test-NamedMutexExists {
 }
 
 function Test-AppMutexExists {
-    foreach ($mutexName in @((Get-MutexName), (Get-LegacyMutexName))) {
+    foreach ($mutexName in (Get-AppMutexNames)) {
         if (Test-NamedMutexExists -Name $mutexName) {
             return $true
         }
@@ -1185,7 +1269,7 @@ function Exit-AppMutexSet {
 
 function Enter-AppMutexSet {
     param(
-        [string[]]$MutexNames = @((Get-MutexName), (Get-LegacyMutexName))
+        [string[]]$MutexNames = (Get-AppMutexNames)
     )
 
     $ownedMutexes = @()
@@ -1254,8 +1338,8 @@ function Copy-FileAtomically {
     }
 
     $operationId = [Guid]::NewGuid().ToString('N')
-    $stagingPath = Join-Path $destinationDirectory ('VpnCliTray.install.{0}.tmp' -f $operationId)
-    $backupPath = Join-Path $destinationDirectory ('VpnCliTray.install.{0}.bak' -f $operationId)
+    $stagingPath = Join-Path $destinationDirectory ('TrayTunnel.install.{0}.tmp' -f $operationId)
+    $backupPath = Join-Path $destinationDirectory ('TrayTunnel.install.{0}.bak' -f $operationId)
     try {
         [IO.File]::Copy($sourceFullPath, $stagingPath, $false)
         if (Test-Path -LiteralPath $destinationFullPath -PathType Leaf) {
@@ -1624,6 +1708,9 @@ function Resolve-InstallationChoices {
 
 function Get-LegacyMigrationState {
     param(
+        [string]$AppId = $script:LegacyAppId,
+        [string]$ProductName = 'AnyConnect Tray',
+        [string]$InstalledFileName = 'AnyConnectTray.ps1',
         [string]$InstallDirectory = $script:LegacyInstallDirectory,
         [string]$InstalledScriptPath = $script:LegacyInstalledScriptPath,
         [string]$SettingsPath = $script:LegacySettingsPath,
@@ -1643,14 +1730,14 @@ function Get-LegacyMigrationState {
     Assert-LegacyMigrationPathsSafe -InstallDirectory $InstallDirectory -FilePaths $legacyFilePaths
 
     if (-not $PSBoundParameters.ContainsKey('StartupCommand')) {
-        $StartupCommand = Get-StartWithWindowsCommand -ValueName $script:LegacyAppId
+        $StartupCommand = Get-StartWithWindowsCommand -ValueName $AppId
     }
 
     $startupOwned = Test-StartupCommandOwned -Command $StartupCommand -ScriptPath $InstalledScriptPath
     $startMenuOwned = Test-AppShortcutOwned -ShortcutPath $StartMenuShortcutPath -ScriptPath $InstalledScriptPath
     $desktopOwned = Test-AppShortcutOwned -ShortcutPath $DesktopShortcutPath -ScriptPath $InstalledScriptPath
     $installScriptPresent = Test-Path -LiteralPath $InstalledScriptPath -PathType Leaf
-    $installScriptRecognized = Test-ApplicationScriptIdentity -Path $InstalledScriptPath -ExpectedAppId $script:LegacyAppId -ExpectedProductName 'AnyConnect Tray' -ExpectedInstalledFileName 'AnyConnectTray.ps1'
+    $installScriptRecognized = Test-ApplicationScriptIdentity -Path $InstalledScriptPath -ExpectedAppId $AppId -ExpectedProductName $ProductName -ExpectedInstalledFileName $InstalledFileName
     $settingsPresent = Test-Path -LiteralPath $SettingsPath -PathType Leaf
     $settingsValid = $settingsPresent -and (Test-MigrationSettingsFileValid -Path $SettingsPath)
     $logPresent = Test-Path -LiteralPath $LogPath -PathType Leaf
@@ -1658,6 +1745,9 @@ function Get-LegacyMigrationState {
     $identityRecognized = $installScriptRecognized -or $startupOwned -or $startMenuOwned -or $desktopOwned
 
     return [pscustomobject]@{
+        AppId                     = $AppId
+        ProductName               = $ProductName
+        InstalledFileName         = $InstalledFileName
         HasArtifacts              = [bool](
             $installScriptPresent -or
             $settingsPresent -or
@@ -1684,6 +1774,35 @@ function Get-LegacyMigrationState {
         StartMenuShortcutOwned    = [bool]$startMenuOwned
         DesktopShortcutOwned      = [bool]$desktopOwned
     }
+}
+
+function Get-LegacyMigrationStates {
+    $previousDirectory = Join-Path $script:LocalAppData 'VpnCliTray'
+    Get-LegacyMigrationState `
+        -AppId 'VpnCliTray' `
+        -ProductName 'VPN CLI Tray' `
+        -InstalledFileName 'VpnCliTray.ps1' `
+        -InstallDirectory $previousDirectory `
+        -InstalledScriptPath (Join-Path $previousDirectory 'VpnCliTray.ps1') `
+        -SettingsPath (Join-Path $previousDirectory 'settings.json') `
+        -LogPath (Join-Path $previousDirectory 'VpnCliTray.log') `
+        -StartMenuShortcutPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'VPN CLI Tray.lnk') `
+        -DesktopShortcutPath (Join-Path ([Environment]::GetFolderPath('Desktop')) 'VPN CLI Tray.lnk')
+    Get-LegacyMigrationState
+}
+
+function Select-LegacyMigrationSource {
+    param([Parameter(Mandatory = $true)][object[]]$States)
+
+    # States are ordered newest identity first. Prefer usable settings, then the
+    # newest recognized installation for startup and shortcut preferences.
+    foreach ($state in $States) {
+        if ($state.IdentityRecognized -and $state.SettingsValid) { return $state }
+    }
+    foreach ($state in $States) {
+        if ($state.IdentityRecognized) { return $state }
+    }
+    return $States[0]
 }
 
 function Get-FileSha256 {
@@ -1747,7 +1866,7 @@ function Copy-LegacySettingsIfNeeded {
     )
 
     if (Test-Path -LiteralPath $NewSettingsPath) {
-        Assert-MigrationSettingsFileValid -Path $NewSettingsPath -Description 'existing VPN CLI Tray settings file'
+        Assert-MigrationSettingsFileValid -Path $NewSettingsPath -Description 'existing TrayTunnel settings file'
         return $false
     }
 
@@ -1756,7 +1875,7 @@ function Copy-LegacySettingsIfNeeded {
     }
 
     Copy-FileAtomically -SourcePath $LegacySettingsPath -DestinationPath $NewSettingsPath
-    Assert-MigrationSettingsFileValid -Path $NewSettingsPath -Description 'migrated VPN CLI Tray settings file'
+    Assert-MigrationSettingsFileValid -Path $NewSettingsPath -Description 'migrated TrayTunnel settings file'
     if (-not (Test-FileContentsEqual -FirstPath $LegacySettingsPath -SecondPath $NewSettingsPath)) {
         throw 'The migrated settings could not be verified.'
     }
@@ -1810,7 +1929,7 @@ function Assert-NewInstallationValid {
     }
 
     if ($SettingsRequired) {
-        Assert-MigrationSettingsFileValid -Path $NewSettingsPath -Description 'validated VPN CLI Tray settings file'
+        Assert-MigrationSettingsFileValid -Path $NewSettingsPath -Description 'validated TrayTunnel settings file'
         if ($SettingsCopied -and
             -not (Test-FileContentsEqual -FirstPath $LegacySettingsPath -SecondPath $NewSettingsPath)) {
             throw 'The migrated settings content could not be verified.'
@@ -1829,14 +1948,14 @@ function Remove-LegacyIdentityAnchor {
 
     switch ($Anchor.Kind) {
         'Startup' {
-            $command = Get-StartWithWindowsCommand -ValueName $script:LegacyAppId
+            $command = Get-StartWithWindowsCommand -ValueName $State.AppId
             if ([string]::IsNullOrWhiteSpace($command)) {
                 return
             }
             if (-not (Test-StartupCommandOwned -Command $command -ScriptPath $State.InstalledScriptPath)) {
-                throw "The legacy startup identity anchor no longer matches its recognized owner: $($script:LegacyAppId)"
+                throw "The legacy startup identity anchor no longer matches its recognized owner: $($State.AppId)"
             }
-            Remove-ItemProperty -Path $script:RunKeyPath -Name $script:LegacyAppId -ErrorAction Stop
+            Remove-ItemProperty -Path $script:RunKeyPath -Name $State.AppId -ErrorAction Stop
         }
         'StartMenu' {
             if (-not (Test-Path -LiteralPath $Anchor.Path)) {
@@ -1860,7 +1979,7 @@ function Remove-LegacyIdentityAnchor {
             if (-not (Test-Path -LiteralPath $Anchor.Path)) {
                 return
             }
-            $scriptRecognized = Test-ApplicationScriptIdentity -Path $Anchor.Path -ExpectedAppId $script:LegacyAppId -ExpectedProductName 'AnyConnect Tray' -ExpectedInstalledFileName 'AnyConnectTray.ps1'
+            $scriptRecognized = Test-ApplicationScriptIdentity -Path $Anchor.Path -ExpectedAppId $State.AppId -ExpectedProductName $State.ProductName -ExpectedInstalledFileName $State.InstalledFileName
             if (-not $scriptRecognized) {
                 throw "The legacy script identity anchor no longer matches its recognized owner: $($Anchor.Path)"
             }
@@ -1881,7 +2000,7 @@ function Remove-LegacyMigrationArtifacts {
     )
 
     if (-not $State.IdentityRecognized) {
-        throw 'Refusing legacy cleanup because the AnyConnect Tray application identity was not recognized.'
+        throw 'Refusing legacy cleanup because the application identity was not recognized.'
     }
 
     Assert-LegacyMigrationPathsSafe -InstallDirectory $State.InstallDirectory -FilePaths @(
@@ -1927,7 +2046,7 @@ function Remove-LegacyMigrationArtifacts {
     }
 
     if (Test-Path -LiteralPath $State.InstallDirectory -PathType Container) {
-        foreach ($filter in @('settings.*.tmp', 'AnyConnectTray.install.*.tmp', 'AnyConnectTray.install.*.bak')) {
+        foreach ($filter in @('settings.*.tmp', "$($State.AppId).install.*.tmp", "$($State.AppId).install.*.bak")) {
             try {
                 $temporaryFiles = @(Get-ChildItem -LiteralPath $State.InstallDirectory -Filter $filter -File -ErrorAction Stop)
                 foreach ($temporaryFile in $temporaryFiles) {
@@ -1952,7 +2071,7 @@ function Remove-LegacyMigrationArtifacts {
 
     $identityAnchors = @()
     if (-not $SkipStartupEntry -and $State.StartupEnabled) {
-        $identityAnchors += [pscustomobject]@{ Kind = 'Startup'; Path = $script:LegacyAppId }
+        $identityAnchors += [pscustomobject]@{ Kind = 'Startup'; Path = $State.AppId }
     }
     if ($State.StartMenuShortcutOwned) {
         $identityAnchors += [pscustomobject]@{ Kind = 'StartMenu'; Path = $State.StartMenuShortcutPath }
@@ -2020,29 +2139,31 @@ function Install-App {
 
     $sourcePath = [IO.Path]::GetFullPath($PSCommandPath)
     $destinationPath = [IO.Path]::GetFullPath($script:InstalledScriptPath)
-    $migrationState = Get-LegacyMigrationState
+    $migrationStates = @(Get-LegacyMigrationStates)
+    $recognizedStates = @($migrationStates | Where-Object { $_.HasArtifacts -and $_.IdentityRecognized })
+    $migrationState = Select-LegacyMigrationSource -States $migrationStates
     $migrationLease = $null
     $migrationPerformed = $false
-    $unrecognizedLegacyArtifacts = $migrationState.HasArtifacts -and -not $migrationState.IdentityRecognized
     $startupEnabled = $true
     $effectiveDesktopShortcut = [bool]$CreateDesktopShortcut
 
     try {
-        if ($migrationState.HasArtifacts -and $migrationState.IdentityRecognized) {
+        if ($recognizedStates.Count -gt 0) {
             $migrationLease = Enter-AppMutexSet
             if (-not $migrationLease.Acquired) {
-                throw 'Legacy migration requires both AnyConnect Tray and VPN CLI Tray to be exited. Choose Exit from the running tray application, then retry the installation.'
+                throw 'Migration requires all current and previous tray versions to be exited. Choose Exit from the running tray application, then retry the installation.'
             }
 
-            # Re-read only after holding both identity mutexes so an old tray cannot
+            # Re-read only after holding all identity mutexes so an old tray cannot
             # start or mutate its per-user state during the transition.
-            $migrationState = Get-LegacyMigrationState
-            $migrationPerformed =
-                [bool]($migrationState.HasArtifacts -and $migrationState.IdentityRecognized)
+            $migrationStates = @(Get-LegacyMigrationStates)
+            $recognizedStates = @($migrationStates | Where-Object { $_.HasArtifacts -and $_.IdentityRecognized })
+            $migrationState = Select-LegacyMigrationSource -States $migrationStates
+            $migrationPerformed = $recognizedStates.Count -gt 0
         }
 
         $existingStartupCommand = Get-StartWithWindowsCommand -ValueName $script:AppId
-        $newScriptRecognized = Test-ApplicationScriptIdentity -Path $destinationPath -ExpectedAppId $script:AppId -ExpectedProductName $script:ProductName -ExpectedInstalledFileName 'VpnCliTray.ps1'
+        $newScriptRecognized = Test-ApplicationScriptIdentity -Path $destinationPath -ExpectedAppId $script:AppId -ExpectedProductName $script:ProductName -ExpectedInstalledFileName 'TrayTunnel.ps1'
         $newStartupEnabled = Test-StartupCommandOwned -Command $existingStartupCommand -ScriptPath $destinationPath
         $newDesktopShortcutOwned = Test-AppShortcutOwned -ShortcutPath $script:DesktopShortcutPath -ScriptPath $destinationPath
         $newStartMenuShortcutOwned = Test-AppShortcutOwned -ShortcutPath $script:StartMenuShortcutPath -ScriptPath $destinationPath
@@ -2120,8 +2241,8 @@ function Install-App {
         Assert-NewInstallationValid @validationParameters
 
         # No legacy artifact is touched before every new artifact above validates.
-        if ($migrationPerformed) {
-            Remove-LegacyMigrationArtifacts -State $migrationState
+        foreach ($recognizedState in $recognizedStates) {
+            Remove-LegacyMigrationArtifacts -State $recognizedState
         }
     }
     finally {
@@ -2140,10 +2261,12 @@ function Install-App {
         Write-Host "Desktop shortcut created at: $($script:DesktopShortcutPath)"
     }
     if ($migrationPerformed) {
-        Write-Host 'Migrated the recognized legacy AnyConnect Tray per-user installation.'
+        Write-Host 'Migrated recognized previous per-user installations to TrayTunnel.'
     }
-    elseif ($unrecognizedLegacyArtifacts) {
-        Write-Warning 'Unrecognized files at legacy AnyConnect Tray paths were left unchanged.'
+    foreach ($legacyState in $migrationStates) {
+        if ($legacyState.HasArtifacts -and -not $legacyState.IdentityRecognized) {
+            Write-Warning "Unrecognized files at a previous installation path were left unchanged: $($legacyState.InstallDirectory)"
+        }
     }
 
     if (Test-AppMutexExists) {
@@ -2160,13 +2283,13 @@ function Install-App {
 function Uninstall-App {
     $uninstallLease = Enter-AppMutexSet
     if (-not $uninstallLease.Acquired) {
-        throw 'A VPN CLI Tray or legacy AnyConnect Tray instance is running. Choose Exit from its menu, then run uninstall again.'
+        throw 'A current or previous tray version is running. Choose Exit from its menu, then run uninstall again.'
     }
 
     try {
-        # Inspect both roots before removing anything. An unsafe legacy path leaves
-        # both identities unchanged so the user can resolve it explicitly.
-        $legacyState = Get-LegacyMigrationState
+        # Inspect every old root before removing anything. Unsafe paths leave all
+        # identities unchanged so the user can resolve the issue explicitly.
+        $legacyStates = @(Get-LegacyMigrationStates)
 
         if (Test-Path -LiteralPath $script:InstallDirectory) {
             if (-not (Test-Path -LiteralPath $script:InstallDirectory -PathType Container)) {
@@ -2208,7 +2331,7 @@ function Uninstall-App {
                 }
             }
 
-            foreach ($filter in @('settings.*.tmp', 'VpnCliTray.install.*.tmp', 'VpnCliTray.install.*.bak')) {
+            foreach ($filter in @('settings.*.tmp', 'TrayTunnel.install.*.tmp', 'TrayTunnel.install.*.bak')) {
                 foreach ($temporaryFile in @(Get-ChildItem -LiteralPath $script:InstallDirectory -Filter $filter -File -ErrorAction SilentlyContinue)) {
                     Remove-Item -LiteralPath $temporaryFile.FullName -Force
                 }
@@ -2223,11 +2346,13 @@ function Uninstall-App {
             }
         }
 
-        if ($legacyState.HasArtifacts -and $legacyState.IdentityRecognized) {
-            Remove-LegacyMigrationArtifacts -State $legacyState
-        }
-        elseif ($legacyState.HasArtifacts) {
-            Write-Warning 'Unrecognized files at legacy AnyConnect Tray paths were left unchanged.'
+        foreach ($legacyState in $legacyStates) {
+            if ($legacyState.HasArtifacts -and $legacyState.IdentityRecognized) {
+                Remove-LegacyMigrationArtifacts -State $legacyState
+            }
+            elseif ($legacyState.HasArtifacts) {
+                Write-Warning "Unrecognized files at a previous installation path were left unchanged: $($legacyState.InstallDirectory)"
+            }
         }
     }
     finally {
@@ -2337,12 +2462,12 @@ function Initialize-WindowsForms {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
 
-    if (-not ('VpnCliTray.NativeMethods' -as [type])) {
+    if (-not ('TrayTunnel.NativeMethods' -as [type])) {
         Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 
-namespace VpnCliTray {
+namespace TrayTunnel {
     public static class NativeMethods {
         [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -2385,7 +2510,7 @@ function New-StatusIcon {
             return ([Drawing.Icon]::FromHandle($handle)).Clone()
         }
         finally {
-            [VpnCliTray.NativeMethods]::DestroyIcon($handle) | Out-Null
+            [TrayTunnel.NativeMethods]::DestroyIcon($handle) | Out-Null
         }
     }
     finally {
@@ -2399,7 +2524,7 @@ function New-StatusIcon {
 function Set-ApplicationState {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('InitialDisconnected', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
+        [ValidateSet('InitialDisconnected', 'CompanyNetwork', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
         [string]$State,
 
         [AllowEmptyString()]
@@ -2422,7 +2547,7 @@ function Set-ApplicationState {
     $script:NotifyIcon.Text = $tooltip
     $script:StatusMenuItem.Text = "Status: $($presentation.Status)"
     $script:ActionMenuItem.Text = $presentation.Action
-    $script:ActionMenuItem.Enabled = $State -ne 'Disconnecting' -and
+    $script:ActionMenuItem.Enabled = $State -notin @('Disconnecting', 'CompanyNetwork') -and
         -not ($State -eq 'DisconnectedError' -and (Test-StateDetailUncertain -Detail $Detail))
 
     if ($null -ne $script:SettingsMenuItem) {
@@ -2524,7 +2649,7 @@ function Test-CiscoCliRegistrationLine {
 function Test-CliNotificationListenerRequired {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('InitialDisconnected', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
+        [ValidateSet('InitialDisconnected', 'CompanyNetwork', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
         [string]$State
     )
 
@@ -2534,7 +2659,7 @@ function Test-CliNotificationListenerRequired {
 function Get-CliNotificationListenerRetentionAction {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('InitialDisconnected', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
+        [ValidateSet('InitialDisconnected', 'CompanyNetwork', 'Connecting', 'Disconnecting', 'Connected', 'DisconnectedError')]
         [string]$State,
 
         [Parameter(Mandatory = $true)]
@@ -3093,10 +3218,64 @@ function Stop-ActiveCliOperation {
     return [string]$operation.Name
 }
 
+function Update-CompanyNetworkStatus {
+    param(
+        [DateTime]$Now = [DateTime]::UtcNow,
+        [switch]$Force
+    )
+
+    if (-not $Force -and $Now -lt $script:NextCompanyNetworkCheck) {
+        return
+    }
+    $script:NextCompanyNetworkCheck = $Now.AddSeconds(5)
+    $detected = $false
+    if ($script:Settings.AutoDisconnectOnCompanyNetwork) {
+        try {
+            $detected = Test-CompanyNetworkSnapshot -Snapshots (Get-NetworkInterfaceSnapshot) -DnsSuffix $script:Settings.CompanyDnsSuffix
+        }
+        catch {
+            # Missing network evidence must never trigger an automatic disconnect.
+        }
+    }
+    if ($detected -ne $script:CompanyNetworkDetected) {
+        $script:NextCompanyDisconnectAttempt = [DateTime]::MinValue
+    }
+    $script:CompanyNetworkDetected = $detected
+    if (-not $detected -and $script:ApplicationState -eq 'CompanyNetwork') {
+        Set-ApplicationState -State 'InitialDisconnected'
+    }
+}
+
+function Invoke-CompanyNetworkPolicy {
+    param([DateTime]$Now = [DateTime]::UtcNow)
+
+    if (-not $script:CompanyNetworkDetected -or
+        $script:DisconnectDeadline -gt [DateTime]::MinValue -or
+        $Now -lt $script:NextCompanyDisconnectAttempt) {
+        return
+    }
+
+    $operationName = if ($null -eq $script:ActiveOperation) { '' } else { [string]$script:ActiveOperation.Name }
+    if ($operationName -eq 'Disconnect') {
+        return
+    }
+    if ($script:ApplicationState -in @('Connected', 'Connecting', 'Disconnecting') -or $operationName -eq 'Connect') {
+        if ($operationName -notin @('', 'Connect', 'Status')) {
+            return
+        }
+        [void](Stop-ActiveCliOperation -Reason 'company network detected')
+        Write-AppLog -Message 'Company network detected; requesting automatic VPN disconnect.'
+        [void](Start-VerifiedDisconnect -Reason 'CompanyNetwork')
+    }
+    elseif ($script:ApplicationState -eq 'InitialDisconnected') {
+        Set-ApplicationState -State 'CompanyNetwork'
+    }
+}
+
 function Get-DisconnectingDetail {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('UserDisconnect', 'UserCancel', 'ConnectTimeout', 'ConnectFailure')]
+        [ValidateSet('UserDisconnect', 'UserCancel', 'ConnectTimeout', 'ConnectFailure', 'CompanyNetwork')]
         [string]$Reason
     )
 
@@ -3105,6 +3284,7 @@ function Get-DisconnectingDetail {
         'UserCancel' { return 'Cancelling connection' }
         'ConnectTimeout' { return 'Cancelling timed-out connection' }
         'ConnectFailure' { return 'Cancelling failed connection' }
+        'CompanyNetwork' { return 'Disconnecting on company network' }
     }
 }
 
@@ -3139,13 +3319,17 @@ function Complete-DisconnectVerification {
     )
 
     $reason = [string]$script:DisconnectReason
-    if ($reason -notin @('UserDisconnect', 'UserCancel', 'ConnectTimeout', 'ConnectFailure')) {
+    if ($reason -notin @('UserDisconnect', 'UserCancel', 'ConnectTimeout', 'ConnectFailure', 'CompanyNetwork')) {
         $reason = 'UserDisconnect'
     }
 
     $script:DisconnectDeadline = [DateTime]::MinValue
     $script:DisconnectReason = ''
     $script:NextStatusPoll = [DateTime]::UtcNow.AddSeconds(5)
+    if ($reason -eq 'CompanyNetwork' -and $Outcome -ne 'Success') {
+        # Keep failures visible and avoid repeatedly issuing a failed command.
+        $script:NextCompanyDisconnectAttempt = [DateTime]::UtcNow.AddSeconds(30)
+    }
 
     switch ($Outcome) {
         'Success' {
@@ -3153,6 +3337,15 @@ function Complete-DisconnectVerification {
                 'UserDisconnect' {
                     Set-ApplicationState -State 'InitialDisconnected'
                     Write-AppLog -Message 'VPN disconnected by user request.'
+                }
+                'CompanyNetwork' {
+                    if ($script:CompanyNetworkDetected) {
+                        Set-ApplicationState -State 'CompanyNetwork'
+                    }
+                    else {
+                        Set-ApplicationState -State 'InitialDisconnected'
+                    }
+                    Write-AppLog -Message 'VPN disconnected automatically on the company network.'
                 }
                 'UserCancel' {
                     Set-ApplicationState -State 'InitialDisconnected' -Detail 'Connection cancelled'
@@ -3169,7 +3362,7 @@ function Complete-DisconnectVerification {
             }
         }
         'Connected' {
-            $detail = if ($reason -eq 'UserDisconnect') {
+            $detail = if ($reason -in @('UserDisconnect', 'CompanyNetwork')) {
                 'Disconnect failed; still connected'
             }
             else {
@@ -3179,7 +3372,7 @@ function Complete-DisconnectVerification {
             Write-AppLog -Level 'ERROR' -Message ("Cisco remained Connected after disconnect verification ({0})." -f $reason)
         }
         'Active' {
-            $detail = if ($reason -eq 'UserDisconnect') {
+            $detail = if ($reason -in @('UserDisconnect', 'CompanyNetwork')) {
                 'Disconnect failed; Cisco still active'
             }
             else {
@@ -3189,7 +3382,7 @@ function Complete-DisconnectVerification {
             Write-AppLog -Level 'ERROR' -Message ("Cisco remained in a transitional state after disconnect verification ({0})." -f $reason)
         }
         'Unavailable' {
-            $detail = if ($reason -eq 'UserDisconnect') {
+            $detail = if ($reason -in @('UserDisconnect', 'CompanyNetwork')) {
                 'Disconnect result unavailable'
             }
             else {
@@ -3208,7 +3401,7 @@ function Continue-DisconnectVerification {
 
     if ([DateTime]::UtcNow -lt $script:DisconnectDeadline) {
         $reason = [string]$script:DisconnectReason
-        if ($reason -notin @('UserDisconnect', 'UserCancel', 'ConnectTimeout', 'ConnectFailure')) {
+        if ($reason -notin @('UserDisconnect', 'UserCancel', 'ConnectTimeout', 'ConnectFailure', 'CompanyNetwork')) {
             $reason = 'UserDisconnect'
         }
         Set-ApplicationState -State 'Disconnecting' -Detail (Get-DisconnectingDetail -Reason $reason)
@@ -3223,7 +3416,7 @@ function Continue-DisconnectVerification {
 function Start-VerifiedDisconnect {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('UserDisconnect', 'UserCancel', 'ConnectTimeout', 'ConnectFailure')]
+        [ValidateSet('UserDisconnect', 'UserCancel', 'ConnectTimeout', 'ConnectFailure', 'CompanyNetwork')]
         [string]$Reason
     )
 
@@ -3271,7 +3464,10 @@ function Set-ApplicationStateFromCiscoState {
             Set-ApplicationState -State 'Disconnecting'
         }
         'Disconnected' {
-            if ($script:ApplicationState -eq 'Connected') {
+            if ($script:CompanyNetworkDetected) {
+                Set-ApplicationState -State 'CompanyNetwork'
+            }
+            elseif ($script:ApplicationState -eq 'Connected') {
                 Set-ApplicationState -State 'DisconnectedError' -Detail 'Connection lost'
                 Write-AppLog -Level 'WARN' -Message 'The VPN connection was lost.'
             }
@@ -3471,6 +3667,12 @@ function Complete-CliOperation {
     }
 }
 function Invoke-TrayAction {
+    Update-CompanyNetworkStatus -Force
+    Invoke-CompanyNetworkPolicy
+    if ($script:CompanyNetworkDetected) {
+        return
+    }
+
     $activeOperationName = if ($null -eq $script:ActiveOperation) {
         ''
     }
@@ -3582,7 +3784,7 @@ function Show-SettingsDialog {
     $form = New-Object Windows.Forms.Form
     $script:SettingsForm = $form
     $form.Text = "$($script:ProductName) Settings"
-    $form.ClientSize = New-Object Drawing.Size 650, 385
+    $form.ClientSize = New-Object Drawing.Size 650, 505
     $form.FormBorderStyle = [Windows.Forms.FormBorderStyle]::FixedDialog
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
@@ -3665,15 +3867,42 @@ function Show-SettingsDialog {
     $warning.Text = "Only enable banner acceptance if your known VPN login asks exactly this question. The CLI cannot distinguish it from another yes/no prompt."
     $form.Controls.Add($warning)
 
+    $autoDisconnect = New-Object Windows.Forms.CheckBox
+    $autoDisconnect.Location = New-Object Drawing.Point 18, 318
+    $autoDisconnect.Size = New-Object Drawing.Size 610, 24
+    $autoDisconnect.Text = 'Automatically disconnect VPN on the company network'
+    $autoDisconnect.Checked = $script:Settings.AutoDisconnectOnCompanyNetwork
+    $form.Controls.Add($autoDisconnect)
+
+    $suffixLabel = New-Object Windows.Forms.Label
+    $suffixLabel.Location = New-Object Drawing.Point 18, 355
+    $suffixLabel.Size = New-Object Drawing.Size 155, 23
+    $suffixLabel.Text = 'Company DNS suffix'
+    $form.Controls.Add($suffixLabel)
+
+    $suffixBox = New-Object Windows.Forms.TextBox
+    $suffixBox.Location = New-Object Drawing.Point 178, 352
+    $suffixBox.Size = New-Object Drawing.Size 450, 23
+    $suffixBox.Text = $script:Settings.CompanyDnsSuffix
+    $suffixBox.Enabled = $autoDisconnect.Checked
+    $form.Controls.Add($suffixBox)
+    $autoDisconnect.Add_CheckedChanged({ $suffixBox.Enabled = $autoDisconnect.Checked })
+
+    $suffixHelp = New-Object Windows.Forms.Label
+    $suffixHelp.Location = New-Object Drawing.Point 37, 386
+    $suffixHelp.Size = New-Object Drawing.Size 585, 50
+    $suffixHelp.Text = 'Use the connection-specific DNS suffix of your company Ethernet or Wi-Fi network. The VPN stays off with a grey icon while it matches. Disable this option to connect manually.'
+    $form.Controls.Add($suffixHelp)
+
     $saveButton = New-Object Windows.Forms.Button
-    $saveButton.Location = New-Object Drawing.Point 472, 334
+    $saveButton.Location = New-Object Drawing.Point 472, 454
     $saveButton.Size = New-Object Drawing.Size 75, 30
     $saveButton.Text = 'Save'
     $form.AcceptButton = $saveButton
     $form.Controls.Add($saveButton)
 
     $cancelButton = New-Object Windows.Forms.Button
-    $cancelButton.Location = New-Object Drawing.Point 553, 334
+    $cancelButton.Location = New-Object Drawing.Point 553, 454
     $cancelButton.Size = New-Object Drawing.Size 75, 30
     $cancelButton.Text = 'Cancel'
     $form.CancelButton = $cancelButton
@@ -3719,6 +3948,10 @@ function Show-SettingsDialog {
             $vpnAddress = $addressBox.Text.Trim()
             $username = $usernameBox.Text.Trim()
             $vpnCliPath = $cliBox.Text.Trim()
+            $companyDnsSuffix = ConvertTo-CompanyDnsSuffix -Value $suffixBox.Text
+            if ($autoDisconnect.Checked -and [string]::IsNullOrEmpty($companyDnsSuffix)) {
+                throw 'Enter a company DNS suffix to enable automatic disconnect.'
+            }
 
             if ([string]::IsNullOrWhiteSpace($vpnAddress)) {
                 throw 'VPN address is required.'
@@ -3756,6 +3989,8 @@ function Show-SettingsDialog {
                 Username          = $username
                 PasswordEncrypted = $encryptedPassword
                 AcceptLoginBanner = $acceptBanner.Checked
+                AutoDisconnectOnCompanyNetwork = $autoDisconnect.Checked
+                CompanyDnsSuffix  = $companyDnsSuffix
                 VpnCliPath        = $resolvedCli
                 Configured        = $isConfigured
                 LoadError         = ''
@@ -3763,11 +3998,12 @@ function Show-SettingsDialog {
 
             Save-AppSettings -Settings $updated
             $script:Settings = $updated
+            $script:NextCompanyNetworkCheck = [DateTime]::MinValue
+            $script:NextCompanyDisconnectAttempt = [DateTime]::MinValue
             $passwordBox.Clear()
             $form.DialogResult = [Windows.Forms.DialogResult]::OK
             $form.Close()
-            # Preserve the last authoritative connection state until the
-            # immediate read-only status refresh completes.
+            # Refresh network policy and Cisco state on the next timer tick.
             $script:NextStatusPoll = [DateTime]::UtcNow
             Write-AppLog -Message 'Settings were saved.'
         }
@@ -3790,8 +4026,8 @@ function Show-SettingsDialog {
 
     $form.Add_Shown({
         Write-AppLog -Message 'Settings dialog shown.'
-        [VpnCliTray.NativeMethods]::ShowWindow($form.Handle, 5) | Out-Null
-        [VpnCliTray.NativeMethods]::SetForegroundWindow($form.Handle) | Out-Null
+        [TrayTunnel.NativeMethods]::ShowWindow($form.Handle, 5) | Out-Null
+        [TrayTunnel.NativeMethods]::SetForegroundWindow($form.Handle) | Out-Null
         $form.Activate()
     })
 
@@ -3854,6 +4090,9 @@ function Start-TrayApplication {
     }
 
     $script:Settings = Read-AppSettings
+    $script:CompanyNetworkDetected = $false
+    $script:NextCompanyNetworkCheck = [DateTime]::MinValue
+    $script:NextCompanyDisconnectAttempt = [DateTime]::MinValue
     $script:ApplicationState = 'InitialDisconnected'
     $script:StateDetail = ''
     $script:ActiveOperation = $null
@@ -3943,7 +4182,9 @@ function Start-TrayApplication {
     $script:PollTimer.Add_Tick({
         try {
             $now = [DateTime]::UtcNow
+            Update-CompanyNetworkStatus -Now $now
             Update-CliNotificationListener -Now $now
+            Invoke-CompanyNetworkPolicy -Now $now
 
             if ($null -ne $script:ActiveOperation) {
                 $operation = $script:ActiveOperation

@@ -5,8 +5,8 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$managerPath = Join-Path $repositoryRoot 'Manage-VpnCliTray.ps1'
-$applicationPath = Join-Path $repositoryRoot 'VpnCliTray.ps1'
+$managerPath = Join-Path $repositoryRoot 'Manage-TrayTunnel.ps1'
+$applicationPath = Join-Path $repositoryRoot 'TrayTunnel.ps1'
 $script:Passed = 0
 
 function Assert-Equal {
@@ -46,34 +46,34 @@ function Assert-Throws {
 }
 
 . $managerPath
-Assert-Equal 'VPN CLI Tray' $script:ProductName 'the manager must expose the renamed product name'
-Assert-Equal 'VpnCliTray' $script:AppId 'the manager must use the renamed application identifier'
-Assert-Equal 'VpnCliTray.ps1' $script:ApplicationAssetName 'the manager must request the renamed application asset'
-Assert-Equal 'VpnCliTray.release.json' $script:ManifestAssetName 'the manager must request the renamed manifest asset'
-Assert-Equal 'VpnCliTray.ps1' ([IO.Path]::GetFileName($script:InstalledScriptPath)) 'the manager must target the renamed installed script'
+Assert-Equal 'TrayTunnel' $script:ProductName 'the manager must expose the renamed product name'
+Assert-Equal 'TrayTunnel' $script:AppId 'the manager must use the renamed application identifier'
+Assert-Equal 'TrayTunnel.ps1' $script:ApplicationAssetName 'the manager must request the renamed application asset'
+Assert-Equal 'TrayTunnel.release.json' $script:ManifestAssetName 'the manager must request the renamed manifest asset'
+Assert-Equal 'TrayTunnel.ps1' ([IO.Path]::GetFileName($script:InstalledScriptPath)) 'the manager must target the renamed installed script'
 Assert-Equal $false (Test-Path -LiteralPath (Join-Path $repositoryRoot 'Manage-AnyConnectTray.ps1')) 'the obsolete manager filename must not remain in the repository'
 Assert-Equal $null (Assert-ProcessNotElevated -IsElevated $false) 'ordinary per-user manager execution must be allowed'
 Assert-Throws -Because 'the manager must stop before any action when elevated' -MessagePattern '*refuses to run with administrator rights*' -Operation {
     Assert-ProcessNotElevated -IsElevated $true
 }
 
-$latestRoot = Get-ReleaseRootUri -RepositoryName 'savidini/VpnCliTray'
-Assert-Equal 'https://github.com/savidini/VpnCliTray/releases/latest/download/' $latestRoot.AbsoluteUri 'the default source must use the latest GitHub Release without an API call'
+$latestRoot = Get-ReleaseRootUri -RepositoryName 'savidini/TrayTunnel'
+Assert-Equal 'https://github.com/savidini/TrayTunnel/releases/latest/download/' $latestRoot.AbsoluteUri 'the default source must use the latest GitHub Release without an API call'
 
 $pinnedPayloadRoot = Get-PayloadReleaseRootUri -ManifestReleaseRootUri $latestRoot -ManifestVersion '0.2.0'
-Assert-Equal 'https://github.com/savidini/VpnCliTray/releases/download/v0.2.0/' $pinnedPayloadRoot.AbsoluteUri 'the payload must be pinned after resolving the latest manifest'
+Assert-Equal 'https://github.com/savidini/TrayTunnel/releases/download/v0.2.0/' $pinnedPayloadRoot.AbsoluteUri 'the payload must be pinned after resolving the latest manifest'
 
-$unprefixedVersionRoot = Get-ReleaseRootUri -RepositoryName 'savidini/VpnCliTray' -ReleaseVersion '0.2.0'
-Assert-Equal 'https://github.com/savidini/VpnCliTray/releases/download/v0.2.0/' $unprefixedVersionRoot.AbsoluteUri 'an unprefixed version must resolve to its v-prefixed immutable release tag'
+$unprefixedVersionRoot = Get-ReleaseRootUri -RepositoryName 'savidini/TrayTunnel' -ReleaseVersion '0.2.0'
+Assert-Equal 'https://github.com/savidini/TrayTunnel/releases/download/v0.2.0/' $unprefixedVersionRoot.AbsoluteUri 'an unprefixed version must resolve to its v-prefixed immutable release tag'
 
-$prefixedVersionRoot = Get-ReleaseRootUri -RepositoryName 'savidini/VpnCliTray' -ReleaseVersion 'v0.2.0'
-Assert-Equal 'https://github.com/savidini/VpnCliTray/releases/download/v0.2.0/' $prefixedVersionRoot.AbsoluteUri 'a v-prefixed version must retain its immutable release tag'
+$prefixedVersionRoot = Get-ReleaseRootUri -RepositoryName 'savidini/TrayTunnel' -ReleaseVersion 'v0.2.0'
+Assert-Equal 'https://github.com/savidini/TrayTunnel/releases/download/v0.2.0/' $prefixedVersionRoot.AbsoluteUri 'a v-prefixed version must retain its immutable release tag'
 
-$customRoot = Get-ReleaseRootUri -RepositoryName 'unused/repository' -CustomReleaseBaseUri ([uri]'https://downloads.example.com/vpnclitray/latest')
-Assert-Equal 'https://downloads.example.com/vpnclitray/latest/' $customRoot.AbsoluteUri 'a custom HTTPS release root must gain a trailing slash'
+$customRoot = Get-ReleaseRootUri -RepositoryName 'unused/repository' -CustomReleaseBaseUri ([uri]'https://downloads.example.com/traytunnel/latest')
+Assert-Equal 'https://downloads.example.com/traytunnel/latest/' $customRoot.AbsoluteUri 'a custom HTTPS release root must gain a trailing slash'
 
-$assetUri = Get-ReleaseAssetUri -ReleaseRootUri $customRoot -AssetName 'VpnCliTray.ps1'
-Assert-Equal 'https://downloads.example.com/vpnclitray/latest/VpnCliTray.ps1' $assetUri.AbsoluteUri 'release assets must stay below the release root'
+$assetUri = Get-ReleaseAssetUri -ReleaseRootUri $customRoot -AssetName 'TrayTunnel.ps1'
+Assert-Equal 'https://downloads.example.com/traytunnel/latest/TrayTunnel.ps1' $assetUri.AbsoluteUri 'release assets must stay below the release root'
 
 Assert-Throws -Because 'plain HTTP release roots must be rejected' -MessagePattern '*Only absolute HTTPS*' -Operation {
     Get-ReleaseRootUri -RepositoryName 'unused/repository' -CustomReleaseBaseUri ([uri]'http://downloads.example.com/latest/') | Out-Null
@@ -85,7 +85,7 @@ Assert-Throws -Because 'custom release roots must not hide path data in a query 
     Get-ReleaseRootUri -RepositoryName 'unused/repository' -CustomReleaseBaseUri ([uri]'https://downloads.example.com/latest/?channel=test') | Out-Null
 }
 Assert-Throws -Because 'asset names must not permit path traversal' -MessagePattern '*Invalid release asset name*' -Operation {
-    Get-ReleaseAssetUri -ReleaseRootUri $customRoot -AssetName '../VpnCliTray.ps1' | Out-Null
+    Get-ReleaseAssetUri -ReleaseRootUri $customRoot -AssetName '../TrayTunnel.ps1' | Out-Null
 }
 $originalElevationProbe = ${function:Test-IsProcessElevated}
 $originalInstallOrUpdate = ${function:Invoke-InstallOrUpdate}
@@ -106,13 +106,13 @@ try {
 
     $script:ElevatedInstallAttempted = $false
     Assert-Throws -Because 'invalid optional versions must be rejected before downloading, including on elevated runners' -MessagePattern '*Invalid release version*' -Operation {
-        Invoke-VpnCliTrayManager -RequestedAction 'Install' -RepositoryName 'savidini/VpnCliTray' -RequestedVersion 'latest please' -CreateDesktopShortcut $false -SkipLaunch $false
+        Invoke-TrayTunnelManager -RequestedAction 'Install' -RepositoryName 'savidini/TrayTunnel' -RequestedVersion 'latest please' -CreateDesktopShortcut $false -SkipLaunch $false
     }
     Assert-Throws -Because 'an uppercase V version prefix must be rejected before downloading, including on elevated runners' -MessagePattern '*Invalid release version*' -Operation {
-        Invoke-VpnCliTrayManager -RequestedAction 'Install' -RepositoryName 'savidini/VpnCliTray' -RequestedVersion 'V0.2.0' -CreateDesktopShortcut $false -SkipLaunch $false
+        Invoke-TrayTunnelManager -RequestedAction 'Install' -RepositoryName 'savidini/TrayTunnel' -RequestedVersion 'V0.2.0' -CreateDesktopShortcut $false -SkipLaunch $false
     }
     Assert-Throws -Because 'invalid optional publisher fingerprints must be rejected before downloading, including on elevated runners' -MessagePattern '*40 or 64 hexadecimal*' -Operation {
-        Invoke-VpnCliTrayManager -RequestedAction 'Install' -RepositoryName 'savidini/VpnCliTray' -ExpectedPublisherThumbprint 'not-a-thumbprint' -CreateDesktopShortcut $false -SkipLaunch $false
+        Invoke-TrayTunnelManager -RequestedAction 'Install' -RepositoryName 'savidini/TrayTunnel' -ExpectedPublisherThumbprint 'not-a-thumbprint' -CreateDesktopShortcut $false -SkipLaunch $false
     }
 
     function Read-Host {
@@ -120,14 +120,14 @@ try {
         return 'q'
     }
     try {
-        Assert-Equal $null (Invoke-VpnCliTrayManager -RequestedAction 'Menu' -RepositoryName 'savidini/VpnCliTray' -CreateDesktopShortcut $false -SkipLaunch $false) 'an elevated user must be able to cancel without taking action'
+        Assert-Equal $null (Invoke-TrayTunnelManager -RequestedAction 'Menu' -RepositoryName 'savidini/TrayTunnel' -CreateDesktopShortcut $false -SkipLaunch $false) 'an elevated user must be able to cancel without taking action'
     }
     finally {
         Remove-Item -LiteralPath 'Function:\Read-Host' -Force -ErrorAction SilentlyContinue
     }
 
     Assert-Throws -Because 'a valid elevated install must remain blocked before lifecycle code runs' -MessagePattern '*refuses to run with administrator rights*' -Operation {
-        Invoke-VpnCliTrayManager -RequestedAction 'Install' -RepositoryName 'savidini/VpnCliTray' -RequestedVersion '0.2.0' -CreateDesktopShortcut $false -SkipLaunch $false
+        Invoke-TrayTunnelManager -RequestedAction 'Install' -RepositoryName 'savidini/TrayTunnel' -RequestedVersion '0.2.0' -CreateDesktopShortcut $false -SkipLaunch $false
     }
     Assert-Equal $false $script:ElevatedInstallAttempted 'the elevated guard must run before installation lifecycle code'
 }
@@ -150,12 +150,12 @@ try {
 finally {
     Remove-Item -LiteralPath 'Function:\Read-Host' -Force -ErrorAction SilentlyContinue
 }
-$tempDirectory = Join-Path ([IO.Path]::GetTempPath()) ('VpnCliTray.ManagerTests.' + [Guid]::NewGuid().ToString('N'))
+$tempDirectory = Join-Path ([IO.Path]::GetTempPath()) ('TrayTunnel.ManagerTests.' + [Guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($tempDirectory)
-$originalOutputVariable = $env:VPNCLITRAY_MANAGER_TEST_OUTPUT
+$originalOutputVariable = $env:TRAYTUNNEL_MANAGER_TEST_OUTPUT
 $originalLegacyInstalledScriptPath = $script:LegacyInstalledScriptPath
 try {
-    $fixturePath = Join-Path $tempDirectory 'VpnCliTray.ps1'
+    $fixturePath = Join-Path $tempDirectory 'TrayTunnel.ps1'
     Copy-Item -LiteralPath $applicationPath -Destination $fixturePath
     $fixtureFile = Get-Item -LiteralPath $fixturePath
     $fixtureHash = (Get-FileHash -LiteralPath $fixturePath -Algorithm SHA256).Hash
@@ -163,10 +163,10 @@ try {
 
     $manifestDocument = [ordered]@{
         schemaVersion = 1
-        product       = 'VpnCliTray'
+        product       = 'TrayTunnel'
         version       = $fixtureVersion
         asset         = [ordered]@{
-            name   = 'VpnCliTray.ps1'
+            name   = 'TrayTunnel.ps1'
             sha256 = $fixtureHash.ToLowerInvariant()
             size   = [long]$fixtureFile.Length
         }
@@ -190,6 +190,48 @@ try {
     [IO.File]::WriteAllText($script:LegacyInstalledScriptPath, ($legacyLines -join "`r`n"), $utf8NoBom)
     Assert-Equal $true (Test-LegacyApplicationScriptOwned) 'the exact legacy path and semantic legacy identity must be recognized'
 
+    $previousDirectory = Join-Path $tempDirectory 'VpnCliTray'
+    [void][IO.Directory]::CreateDirectory($previousDirectory)
+    $previousScriptPath = Join-Path $previousDirectory 'VpnCliTray.ps1'
+    $previousSource = ($legacyLines -join "`r`n").Replace('AnyConnect Tray', 'VPN CLI Tray').Replace('AnyConnectTray', 'VpnCliTray')
+    [IO.File]::WriteAllText($previousScriptPath, $previousSource, $utf8NoBom)
+    $previousIdentity = @{
+        Path = $previousScriptPath
+        ExpectedAppId = 'VpnCliTray'
+        ExpectedProductName = 'VPN CLI Tray'
+        ExpectedFileName = 'VpnCliTray.ps1'
+    }
+    Assert-Equal $true (Test-LegacyApplicationScriptOwned @previousIdentity) 'the manager must recognize VPN CLI Tray for upgrade and uninstall'
+    Assert-Equal $false (Test-LegacyApplicationScriptOwned -Path $previousScriptPath) 'a previous script must not pass identity validation for a different product'
+    $previousCandidates = @(Get-LegacyInstallationCandidates)
+    Assert-Equal 'VpnCliTray' $previousCandidates[0].AppId 'the manager must prefer the most recent previous application name'
+    Assert-Equal 'AnyConnectTray' $previousCandidates[1].AppId 'the manager must retain support for the earliest application name'
+    [IO.File]::WriteAllText($previousScriptPath, ('<#' + $previousSource + '#>'), $utf8NoBom)
+    Assert-Equal $false (Test-LegacyApplicationScriptOwned @previousIdentity) 'commented identity markers must not authorize recognition of VPN CLI Tray'
+    [IO.File]::WriteAllText($previousScriptPath, $previousSource, $utf8NoBom)
+
+    $originalCandidateProbe = ${function:Get-LegacyInstallationCandidates}
+    $originalStatusInstalledPath = $script:InstalledScriptPath
+    $originalStatusRunKey = $script:RunKeyPath
+    try {
+        function Get-LegacyInstallationCandidates {
+            [pscustomobject]@{ AppId = 'VpnCliTray'; ProductName = 'VPN CLI Tray'; FileName = 'VpnCliTray.ps1'; Path = $previousScriptPath }
+            [pscustomobject]@{ AppId = 'AnyConnectTray'; ProductName = 'AnyConnect Tray'; FileName = 'AnyConnectTray.ps1'; Path = $script:LegacyInstalledScriptPath }
+        }
+        $script:InstalledScriptPath = Join-Path $tempDirectory 'not-installed\TrayTunnel.ps1'
+        $script:RunKeyPath = 'HKCU:\Software\TrayTunnel.Tests.DoesNotExist'
+        $recognizedInstalls = @(Get-RecognizedLegacyInstallations)
+        Assert-Equal 2 $recognizedInstalls.Count 'the manager must recognize both previous installations when they coexist'
+        $statusOutput = (Show-InstallationStatus 6>&1 | Out-String)
+        Assert-True $statusOutput.Contains('VPN CLI Tray (previous name)') 'status must identify the actual old installation before migration'
+        Assert-True $statusOutput.Contains('Install or update TrayTunnel') 'status must explain how to upgrade to the new name'
+    }
+    finally {
+        Set-Item -LiteralPath 'Function:\Get-LegacyInstallationCandidates' -Value $originalCandidateProbe
+        $script:InstalledScriptPath = $originalStatusInstalledPath
+        $script:RunKeyPath = $originalStatusRunKey
+    }
+
     $invalidSemVerLines = @($legacyLines | ForEach-Object { $_.Replace('0.1.8', '01.1.8') })
     [IO.File]::WriteAllText($script:LegacyInstalledScriptPath, ($invalidSemVerLines -join "`r`n"), $utf8NoBom)
     Assert-Equal $false (Test-LegacyApplicationScriptOwned) 'a legacy version with a leading-zero numeric identifier must fail semantic identity recognition'
@@ -209,7 +251,7 @@ try {
     [IO.File]::WriteAllText($script:LegacyInstalledScriptPath, 'param([switch]$Uninstall)', $utf8NoBom)
     Assert-Equal $false (Test-LegacyApplicationScriptOwned) 'an arbitrary parseable file at the legacy path must not be treated as owned'
 
-    $manifestPath = Join-Path $tempDirectory 'VpnCliTray.release.json'
+    $manifestPath = Join-Path $tempDirectory 'TrayTunnel.release.json'
     [IO.File]::WriteAllText($manifestPath, ($manifestDocument | ConvertTo-Json -Depth 3), $utf8NoBom)
 
     $manifest = Read-ReleaseManifest -Path $manifestPath
@@ -268,7 +310,7 @@ try {
 
     $wrongHashManifest = [pscustomobject]@{
         Version = $fixtureVersion
-        Name    = 'VpnCliTray.ps1'
+        Name    = 'TrayTunnel.ps1'
         Sha256  = ('0' * 64)
         Size    = [long]$fixtureFile.Length
     }
@@ -278,7 +320,7 @@ try {
 
     $wrongVersionManifest = [pscustomobject]@{
         Version = '9.9.9'
-        Name    = 'VpnCliTray.ps1'
+        Name    = 'TrayTunnel.ps1'
         Sha256  = $fixtureHash.ToUpperInvariant()
         Size    = [long]$fixtureFile.Length
     }
@@ -305,13 +347,13 @@ try {
     }
 
     $argumentOutputPath = Join-Path $tempDirectory 'arguments.txt'
-    $env:VPNCLITRAY_MANAGER_TEST_OUTPUT = $argumentOutputPath
+    $env:TRAYTUNNEL_MANAGER_TEST_OUTPUT = $argumentOutputPath
     $stubPath = Join-Path $tempDirectory 'argument-stub.ps1'
     $stubLines = @(
         '#requires -Version 5.1'
         'param([switch]$Install, [switch]$DesktopShortcut, [switch]$NoLaunch)'
         '$received = @([bool]$Install, [bool]$DesktopShortcut, [bool]$NoLaunch) -join '','''
-        '[IO.File]::WriteAllText($env:VPNCLITRAY_MANAGER_TEST_OUTPUT, $received)'
+        '[IO.File]::WriteAllText($env:TRAYTUNNEL_MANAGER_TEST_OUTPUT, $received)'
     )
     [IO.File]::WriteAllText($stubPath, ($stubLines -join "`r`n"), $utf8NoBom)
     Invoke-WindowsPowerShellFile -Path $stubPath -Arguments @('-Install', '-DesktopShortcut', '-NoLaunch')
@@ -324,7 +366,7 @@ try {
     }
 }
 finally {
-    $env:VPNCLITRAY_MANAGER_TEST_OUTPUT = $originalOutputVariable
+    $env:TRAYTUNNEL_MANAGER_TEST_OUTPUT = $originalOutputVariable
     $script:LegacyInstalledScriptPath = $originalLegacyInstalledScriptPath
     if (Test-Path -LiteralPath $tempDirectory -PathType Container) {
         [IO.Directory]::Delete($tempDirectory, $true)

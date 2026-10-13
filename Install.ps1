@@ -6,7 +6,7 @@ param(
     [switch]$NoLaunch
 )
 
-$arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'VpnCliTray.ps1'), '-Install')
+$arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'TrayTunnel.ps1'), '-Install')
 if ($DesktopShortcut) {
     $arguments += '-DesktopShortcut'
 }

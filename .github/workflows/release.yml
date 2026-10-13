@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.repository == 'savidini/VpnCliTray'
+    if: github.repository == 'savidini/TrayTunnel'
     name: Test and publish release
     runs-on: windows-2022
     timeout-minutes: 20
@@ -111,8 +111,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $applicationSource = Join-Path $env:GITHUB_WORKSPACE 'VpnCliTray.ps1'
-          $managerSource = Join-Path $env:GITHUB_WORKSPACE 'Manage-VpnCliTray.ps1'
+          $applicationSource = Join-Path $env:GITHUB_WORKSPACE 'TrayTunnel.ps1'
+          $managerSource = Join-Path $env:GITHUB_WORKSPACE 'Manage-TrayTunnel.ps1'
           foreach ($sourcePath in @($applicationSource, $managerSource)) {
               if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
                   throw "Required release asset was not found: $sourcePath"
@@ -132,12 +132,12 @@ jobs:
           }
 
           $releaseDirectory = Join-Path $env:RUNNER_TEMP (
-              'VpnCliTray-release-' + [Guid]::NewGuid().ToString('N')
+              'TrayTunnel-release-' + [Guid]::NewGuid().ToString('N')
           )
           [void](New-Item -ItemType Directory -Path $releaseDirectory)
 
-          $applicationAsset = Join-Path $releaseDirectory 'VpnCliTray.ps1'
-          $managerAsset = Join-Path $releaseDirectory 'Manage-VpnCliTray.ps1'
+          $applicationAsset = Join-Path $releaseDirectory 'TrayTunnel.ps1'
+          $managerAsset = Join-Path $releaseDirectory 'Manage-TrayTunnel.ps1'
           Copy-Item -LiteralPath $applicationSource -Destination $applicationAsset
           Copy-Item -LiteralPath $managerSource -Destination $managerAsset
 
@@ -145,17 +145,17 @@ jobs:
           $applicationHash = (Get-FileHash -LiteralPath $applicationAsset -Algorithm SHA256).Hash.ToLowerInvariant()
           $manifest = [ordered]@{
               schemaVersion = 1
-              product       = 'VpnCliTray'
+              product       = 'TrayTunnel'
               version       = $version
               asset         = [ordered]@{
-                  name   = 'VpnCliTray.ps1'
+                  name   = 'TrayTunnel.ps1'
                   sha256 = $applicationHash
                   size   = [long]$applicationFile.Length
               }
           }
 
           $utf8NoBom = New-Object Text.UTF8Encoding($false)
-          $manifestPath = Join-Path $releaseDirectory 'VpnCliTray.release.json'
+          $manifestPath = Join-Path $releaseDirectory 'TrayTunnel.release.json'
           $manifestJson = $manifest | ConvertTo-Json -Depth 3
           [IO.File]::WriteAllText(
               $manifestPath,
@@ -217,16 +217,16 @@ jobs:
                   --draft `
                   --verify-tag `
                   --generate-notes `
-                  --title "VPN CLI Tray $tag"
+                  --title "TrayTunnel $tag"
               if ($LASTEXITCODE -ne 0) {
                   throw "Could not create draft release for $tag."
               }
           }
 
           $assets = @(
-              (Join-Path $env:RELEASE_DIRECTORY 'VpnCliTray.ps1')
-              (Join-Path $env:RELEASE_DIRECTORY 'Manage-VpnCliTray.ps1')
-              (Join-Path $env:RELEASE_DIRECTORY 'VpnCliTray.release.json')
+              (Join-Path $env:RELEASE_DIRECTORY 'TrayTunnel.ps1')
+              (Join-Path $env:RELEASE_DIRECTORY 'Manage-TrayTunnel.ps1')
+              (Join-Path $env:RELEASE_DIRECTORY 'TrayTunnel.release.json')
           )
           $expectedAssetHashes = @{}
           foreach ($assetPath in $assets) {
@@ -267,7 +267,7 @@ jobs:
           }
 
           $verificationDirectory = Join-Path $env:RUNNER_TEMP (
-              'VpnCliTray-release-verification-' + [Guid]::NewGuid().ToString('N')
+              'TrayTunnel-release-verification-' + [Guid]::NewGuid().ToString('N')
           )
           [void](New-Item -ItemType Directory -Path $verificationDirectory)
           try {

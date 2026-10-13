@@ -17,7 +17,7 @@ concurrency:
 jobs:
   build:
     if: >-
-      github.repository == 'savidini/VpnCliTray' &&
+      github.repository == 'savidini/TrayTunnel' &&
       (
         (
           github.event_name == 'workflow_dispatch' &&
@@ -50,7 +50,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          ASSET_NAME: Manage-VpnCliTray.ps1
+          ASSET_NAME: Manage-TrayTunnel.ps1
         run: |
           set -euo pipefail
 
@@ -77,9 +77,9 @@ jobs:
 
           expected_assets="$(
             printf '%s\n' \
-              'Manage-VpnCliTray.ps1' \
-              'VpnCliTray.ps1' \
-              'VpnCliTray.release.json' | LC_ALL=C sort
+              'Manage-TrayTunnel.ps1' \
+              'TrayTunnel.ps1' \
+              'TrayTunnel.release.json' | LC_ALL=C sort
           )"
           actual_assets="$(
             jq -r '.assets[].name' "${release_json}" | LC_ALL=C sort

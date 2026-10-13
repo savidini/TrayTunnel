@@ -7,7 +7,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$scriptPath = Join-Path $repositoryRoot 'VpnCliTray.ps1'
+$scriptPath = Join-Path $repositoryRoot 'TrayTunnel.ps1'
 $script:Passed = 0
 
 function Assert-Equal {
@@ -59,18 +59,18 @@ foreach ($powerShellFile in (Get-ChildItem -LiteralPath $repositoryRoot -Recurse
 }
 
 . $scriptPath
-Assert-Equal 'VPN CLI Tray' $script:ProductName 'the display product name must use the neutral application identity'
-Assert-Equal 'VpnCliTray' $script:AppId 'the per-user application ID must use the neutral identity'
-Assert-Equal '0.2.1' $script:Version 'the notification-listener fix must be a patch release'
-Assert-True ($script:InstalledScriptPath.EndsWith('\VpnCliTray\VpnCliTray.ps1')) 'the install namespace and script name must be VpnCliTray'
-Assert-True ($script:LogPath.EndsWith('\VpnCliTray\VpnCliTray.log')) 'the log namespace and file name must be VpnCliTray'
+Assert-Equal 'TrayTunnel' $script:ProductName 'the display product name must use the neutral application identity'
+Assert-Equal 'TrayTunnel' $script:AppId 'the per-user application ID must use the neutral identity'
+Assert-Equal '0.3.0' $script:Version 'the TrayTunnel rename and company network feature must use the new release version'
+Assert-True ($script:InstalledScriptPath.EndsWith('\TrayTunnel\TrayTunnel.ps1')) 'the install namespace and script name must be TrayTunnel'
+Assert-True ($script:LogPath.EndsWith('\TrayTunnel\TrayTunnel.log')) 'the log namespace and file name must be TrayTunnel'
 Assert-Equal 'AnyConnectTray' $script:LegacyAppId 'the former application ID must remain available only for migration'
-Assert-True ((Get-MutexName) -like 'Local\VpnCliTray-*') 'the primary tray mutex must use the new application ID'
+Assert-True ((Get-MutexName) -like 'Local\TrayTunnel-*') 'the primary tray mutex must use the new application ID'
 Assert-True ((Get-LegacyMutexName) -like 'Local\AnyConnectTray-*') 'the compatibility mutex must coordinate with the legacy tray'
 
 $testMutexNames = @(
-    ('Local\VpnCliTray.Tests.{0}.new' -f [Guid]::NewGuid().ToString('N'))
-    ('Local\VpnCliTray.Tests.{0}.legacy' -f [Guid]::NewGuid().ToString('N'))
+    ('Local\TrayTunnel.Tests.{0}.new' -f [Guid]::NewGuid().ToString('N'))
+    ('Local\TrayTunnel.Tests.{0}.legacy' -f [Guid]::NewGuid().ToString('N'))
 )
 $testMutexLease = Enter-AppMutexSet -MutexNames $testMutexNames
 try {
@@ -166,6 +166,49 @@ $virtualGatewaySnapshot = [pscustomobject]@{
     GatewayAddresses     = @('192.0.2.1')
 }
 Assert-Equal $false (Test-NetworkInterfaceSnapshotAvailable -Snapshots @($virtualGatewaySnapshot)) 'a virtual switch must not mask loss of the physical network'
+
+Assert-Equal 'office.example.com' (ConvertTo-CompanyDnsSuffix -Value ' OFFICE.Example.COM. ') 'DNS suffixes must normalize case, surrounding whitespace, and the final dot'
+Assert-Equal '' (ConvertTo-CompanyDnsSuffix -Value '') 'a disabled rule may have an empty suffix'
+foreach ($invalidSuffix in @('*.example.com', 'office example.com', 'office..example.com', 'office.example.com..', '-office.example.com', '.', "office.example.com`nother.example.com", ('a' * 64) + '.example.com')) {
+    Assert-Throws -Because 'invalid DNS suffixes must be rejected' -MessagePattern '*valid DNS suffix*' -Operation {
+        ConvertTo-CompanyDnsSuffix -Value $invalidSuffix
+    }
+}
+
+$companyWifi = [pscustomobject]@{
+    Name                 = 'Wi-Fi'
+    Description          = 'Physical wireless adapter'
+    OperationalStatus    = 'Up'
+    NetworkInterfaceType = 'Wireless80211'
+    DnsSuffix            = 'OFFICE.example.com.'
+    GatewayAddresses     = @()
+}
+Assert-Equal $true (Test-CompanyNetworkSnapshot -Snapshots @($companyWifi) -DnsSuffix 'office.example.com') 'a physical company adapter must match even without a default gateway'
+Assert-Equal $false (Test-CompanyNetworkSnapshot -Snapshots @($companyWifi) -DnsSuffix 'example.com') 'a parent domain must not match a different connection-specific suffix'
+Assert-Equal $false (Test-CompanyNetworkSnapshot -Snapshots @($companyWifi) -DnsSuffix 'otheroffice.example.com') 'a partial suffix match must not trigger disconnect'
+Assert-Equal $false (Test-CompanyNetworkSnapshot -Snapshots @($companyWifi) -DnsSuffix '') 'an empty suffix must never detect a company network'
+Assert-Equal $false (Test-CompanyNetworkSnapshot -Snapshots @($companyWifi) -DnsSuffix '*.example.com') 'malformed stored rules must never detect a company network'
+Assert-Equal $false (Test-CompanyNetworkSnapshot -Snapshots @($wifiSnapshot) -DnsSuffix 'office.example.com') 'missing adapter DNS data must not match'
+Assert-Equal $false (Test-CompanyNetworkSnapshot -Snapshots @() -DnsSuffix 'office.example.com') 'missing network adapters must not match'
+
+$companyEthernet = $companyWifi.PSObject.Copy()
+$companyEthernet.Name = 'Ethernet'
+$companyEthernet.Description = 'Physical Ethernet adapter'
+$companyEthernet.NetworkInterfaceType = 'Ethernet'
+Assert-Equal $true (Test-CompanyNetworkSnapshot -Snapshots @($wifiSnapshot, $companyEthernet) -DnsSuffix 'office.example.com') 'any active physical company adapter must match on a multihomed computer'
+foreach ($description in @('Cisco AnyConnect Secure Mobility Client Virtual Miniport Adapter', 'Cisco Secure Client Virtual Miniport Adapter for Windows x64', 'WireGuard Tunnel', 'Hyper-V Virtual Ethernet Adapter')) {
+    $tunnelSnapshot = $companyEthernet.PSObject.Copy()
+    $tunnelSnapshot.Description = $description
+    Assert-Equal $false (Test-CompanyNetworkSnapshot -Snapshots @($tunnelSnapshot) -DnsSuffix 'office.example.com') 'a DNS suffix supplied by a VPN or virtual adapter must not trigger disconnect'
+}
+$downCompanyWifi = $companyWifi.PSObject.Copy()
+$downCompanyWifi.OperationalStatus = 'Down'
+Assert-Equal $false (Test-CompanyNetworkSnapshot -Snapshots @($downCompanyWifi) -DnsSuffix 'office.example.com') 'a remembered suffix on a disconnected adapter must not match'
+
+Assert-Equal '#7A7A7A' (Get-TrayPresentation -State 'CompanyNetwork').Color 'the company network state must use the grey icon'
+Assert-Equal 'VPN not needed' (Get-TrayPresentation -State 'CompanyNetwork').Action 'the company network state must explain why Connect is unavailable'
+Assert-Equal 'Ignore' (Get-TrayActionKind -State 'CompanyNetwork') 'a tray click must not connect while the company network rule applies'
+Assert-Equal $true (Test-TraySettingsEnabled -State 'CompanyNetwork') 'the user must be able to disable or edit the company network rule'
 
 Assert-Equal 'CancelConnect' (Get-TrayActionKind -State 'Connecting' -ActiveOperationName 'Connect') 'an active connect must be cancellable'
 Assert-Equal 'CancelConnect' (Get-TrayActionKind -State 'Connecting' -ActiveOperationName 'Status') 'Cisco reconnecting discovered by status must be cancellable'
@@ -278,7 +321,7 @@ Assert-Equal $true $script:ActiveOperation.Completed 'a listener status query mu
 Assert-Equal $true (Test-CliNotificationStatusOperationSucceeded -Operation $script:ActiveOperation) 'a parsed state must remain successful even if the listener reaches EOF in the same drain'
 $script:ActiveOperation = $null
 
-$notificationTestDirectory = Join-Path ([IO.Path]::GetTempPath()) ('VpnCliTray.Notifications.' + [Guid]::NewGuid().ToString('N'))
+$notificationTestDirectory = Join-Path ([IO.Path]::GetTempPath()) ('TrayTunnel.Notifications.' + [Guid]::NewGuid().ToString('N'))
 $savedNotificationInstallDirectory = $script:InstallDirectory
 $savedNotificationLogPath = $script:LogPath
 $savedNotificationStateVariable = Get-Variable -Name 'ApplicationState' -Scope Script -ErrorAction SilentlyContinue
@@ -290,7 +333,7 @@ $savedNotificationIcon = if ($null -eq $savedNotificationIconVariable) { $null }
 $savedNotificationOperation = $script:ActiveOperation
 try {
     $script:InstallDirectory = $notificationTestDirectory
-    $script:LogPath = Join-Path $notificationTestDirectory 'VpnCliTray.log'
+    $script:LogPath = Join-Path $notificationTestDirectory 'TrayTunnel.log'
     $script:ApplicationState = 'Connected'
     $script:StateDetail = ''
     $script:NotifyIcon = $null
@@ -390,13 +433,13 @@ foreach ($state in $expectedPresentations.Keys) {
     Assert-Equal $expectedPresentations[$state] $presentation.Color "the $state presentation must use its documented color"
 }
 
-$startupCommand = Get-StartupCommand -ScriptPath 'C:\Path With Spaces\VpnCliTray.ps1'
+$startupCommand = Get-StartupCommand -ScriptPath 'C:\Path With Spaces\TrayTunnel.ps1'
 Assert-True ($startupCommand.Contains('-NoProfile')) 'startup must not load a user profile'
 Assert-True ($startupCommand.Contains('-STA')) 'startup must use STA for Windows Forms'
-Assert-True ($startupCommand.Contains('-File "C:\Path With Spaces\VpnCliTray.ps1"')) 'startup must quote the script path'
+Assert-True ($startupCommand.Contains('-File "C:\Path With Spaces\TrayTunnel.ps1"')) 'startup must quote the script path'
 Assert-Equal $false ($startupCommand.Contains('-NoConsoleHost')) 'interactive launchers must hand off instead of hosting the long-running tray'
 
-$noConsoleArguments = Get-AppArguments -ScriptPath 'C:\Path With Spaces\VpnCliTray.ps1' -NoConsoleHost
+$noConsoleArguments = Get-AppArguments -ScriptPath 'C:\Path With Spaces\TrayTunnel.ps1' -NoConsoleHost
 Assert-True ($noConsoleArguments.EndsWith(' -NoConsoleHost')) 'the console-free child must be marked to prevent a rehost loop'
 Assert-Equal $true (Test-AppRehostRequired -IsNoConsoleHost $false -ApartmentState STA) 'an ordinary STA launch must still hand off to a console-free child'
 Assert-Equal $true (Test-AppRehostRequired -IsNoConsoleHost $true -ApartmentState MTA) 'an MTA child must be relaunched as STA'
@@ -423,7 +466,7 @@ foreach ($color in @('#7A7A7A', '#F5A623', '#B1CB21', '#E04B4F')) {
 }
 
 $originalLocalAppData = $script:LocalAppData
-$testPreferenceRoot = Join-Path ([IO.Path]::GetTempPath()) ('VpnCliTray.Preferences.' + [Guid]::NewGuid().ToString('N'))
+$testPreferenceRoot = Join-Path ([IO.Path]::GetTempPath()) ('TrayTunnel.Preferences.' + [Guid]::NewGuid().ToString('N'))
 try {
     $securePreferencePath = Join-Path $testPreferenceRoot 'Cisco\Cisco Secure Client\VPN\preferences.xml'
     $legacyPreferencePath = Join-Path $testPreferenceRoot 'Cisco\Cisco AnyConnect Secure Mobility Client\preferences.xml'
@@ -447,11 +490,14 @@ finally {
 $originalInstallDirectory = $script:InstallDirectory
 $originalSettingsPath = $script:SettingsPath
 $originalLogPath = $script:LogPath
-$testSettingsDirectory = Join-Path ([IO.Path]::GetTempPath()) ('VpnCliTray.Tests.' + [Guid]::NewGuid().ToString('N'))
+$testSettingsDirectory = Join-Path ([IO.Path]::GetTempPath()) ('TrayTunnel.Tests.' + [Guid]::NewGuid().ToString('N'))
 try {
     $script:InstallDirectory = $testSettingsDirectory
     $script:SettingsPath = Join-Path $testSettingsDirectory 'settings.json'
-    $script:LogPath = Join-Path $testSettingsDirectory 'VpnCliTray.log'
+    $script:LogPath = Join-Path $testSettingsDirectory 'TrayTunnel.log'
+    $defaultSettings = Read-AppSettings
+    Assert-Equal $false $defaultSettings.AutoDisconnectOnCompanyNetwork 'automatic disconnect must be opt-in'
+    Assert-Equal '' $defaultSettings.CompanyDnsSuffix 'new settings must not embed employer-specific configuration'
     $unicodeVpnAddress = 'vpn.example.com/Gr{0}ppe' -f [char]0x00FC
     $unicodeUsername = 'J{0}rg' -f [char]0x00F6
     $unicodeSettings = [pscustomobject]@{
@@ -459,19 +505,38 @@ try {
         Username          = $unicodeUsername
         PasswordEncrypted = $ciphertext
         AcceptLoginBanner = $false
+        AutoDisconnectOnCompanyNetwork = $true
+        CompanyDnsSuffix  = ' Office.Example.Com. '
         VpnCliPath        = 'C:\Program Files\Cisco\vpncli.exe'
     }
     Save-AppSettings -Settings $unicodeSettings
     $roundTrippedSettings = Read-AppSettings
     Assert-Equal $unicodeVpnAddress $roundTrippedSettings.VpnAddress 'UTF-8 VPN addresses must round-trip under Windows PowerShell 5.1'
     Assert-Equal $unicodeUsername $roundTrippedSettings.Username 'UTF-8 usernames must round-trip under Windows PowerShell 5.1'
+    Assert-Equal $true $roundTrippedSettings.AutoDisconnectOnCompanyNetwork 'the automatic disconnect preference must survive saving and reloading'
+    Assert-Equal 'office.example.com' $roundTrippedSettings.CompanyDnsSuffix 'the normalized company suffix must survive saving and reloading'
+
+    $emptyRule = $unicodeSettings.PSObject.Copy()
+    $emptyRule.CompanyDnsSuffix = ''
+    Assert-Throws -Because 'an enabled rule must require a suffix' -MessagePattern '*Enter a company DNS suffix*' -Operation {
+        Save-AppSettings -Settings $emptyRule
+    }
 
     $storedDocument = [IO.File]::ReadAllText($script:SettingsPath, (New-Object Text.UTF8Encoding($false))) | ConvertFrom-Json
     $storedDocument.AcceptLoginBanner = 'false'
+    $storedDocument.AutoDisconnectOnCompanyNetwork = 'true'
     $storedJson = $storedDocument | ConvertTo-Json -Depth 3
     [IO.File]::WriteAllText($script:SettingsPath, $storedJson, (New-Object Text.UTF8Encoding($false)))
     $strictSettings = Read-AppSettings
     Assert-Equal $false $strictSettings.AcceptLoginBanner 'a string-valued banner flag must fail closed'
+    Assert-Equal $false $strictSettings.AutoDisconnectOnCompanyNetwork 'a string-valued auto-disconnect flag must not enable the feature'
+    $storedDocument.PSObject.Properties.Remove('AutoDisconnectOnCompanyNetwork')
+    $storedDocument.PSObject.Properties.Remove('CompanyDnsSuffix')
+    [IO.File]::WriteAllText($script:SettingsPath, ($storedDocument | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding($false)))
+    $olderSettings = Read-AppSettings
+    Assert-Equal $false $olderSettings.AutoDisconnectOnCompanyNetwork 'existing settings must load with automatic disconnect disabled'
+    Assert-Equal '' $olderSettings.CompanyDnsSuffix 'existing settings must load without requiring a suffix'
+    Assert-Equal $true $olderSettings.Configured 'adding optional settings must preserve existing credentials'
     $storedDocument.SchemaVersion = $script:SettingsSchemaVersion + 1
     $storedJson = $storedDocument | ConvertTo-Json -Depth 3
     [IO.File]::WriteAllText($script:SettingsPath, $storedJson, (New-Object Text.UTF8Encoding($false)))
@@ -505,6 +570,139 @@ try {
     Complete-DisconnectVerification -Outcome 'Success'
     Assert-Equal 'DisconnectedError' $script:ApplicationState 'cleanup after a failed connection must remain an error state'
     Assert-Equal '#E04B4F' (Get-TrayPresentation -State $script:ApplicationState -Detail $script:StateDetail).Color 'cleanup after a failed connection must retain the red icon'
+
+    $originalSnapshotProbe = ${function:Get-NetworkInterfaceSnapshot}
+    $originalCliStarter = ${function:Start-CliOperation}
+    $originalCliStopper = ${function:Stop-CliProcess}
+    try {
+        function Get-NetworkInterfaceSnapshot {
+            if ($script:CompanyProbeThrows) { throw 'Adapter enumeration unavailable' }
+            return $script:CompanyTestSnapshots
+        }
+        function Start-CliOperation {
+            param($Operation, $InputText, $TimeoutSeconds)
+            $script:CompanyTestCommands.Add($Operation)
+            $script:ActiveOperation = [pscustomobject]@{ Name = $Operation; Transport = 'Process' }
+            return $true
+        }
+        function Stop-CliProcess {
+            param($Operation, $Reason)
+            $script:CompanyTestStopped.Add($Operation.Name)
+        }
+
+        $script:Settings = $roundTrippedSettings
+        $script:CompanyTestCommands = New-Object 'Collections.Generic.List[string]'
+        $script:CompanyTestStopped = New-Object 'Collections.Generic.List[string]'
+        $script:CompanyTestSnapshots = @($companyWifi)
+        $script:CompanyProbeThrows = $false
+        $script:CompanyNetworkDetected = $false
+        $script:NextCompanyDisconnectAttempt = [DateTime]::MinValue
+        $script:DisconnectDeadline = [DateTime]::MinValue
+        $script:ApplicationState = 'Connected'
+        $script:ActiveOperation = [pscustomobject]@{ Name = 'Status'; Transport = 'Process' }
+
+        Update-CompanyNetworkStatus -Force
+        Invoke-CompanyNetworkPolicy
+        Assert-Equal 1 $script:CompanyTestCommands.Count 'arriving on a company network must issue one automatic disconnect'
+        Assert-Equal 'Disconnect' $script:CompanyTestCommands[0] 'automatic disconnect must use Cisco disconnect'
+        Assert-Equal 'Status' $script:CompanyTestStopped[0] 'automatic disconnect must detach a pending status query'
+        Assert-Equal 'CompanyNetwork' $script:DisconnectReason 'automatic disconnect must retain its intentional reason'
+        Assert-Equal 'Disconnecting' $script:ApplicationState 'the icon must not claim the VPN is off before Cisco confirms'
+        Invoke-CompanyNetworkPolicy
+        Assert-Equal 1 $script:CompanyTestCommands.Count 'repeated timer ticks must not duplicate an in-flight disconnect'
+
+        $script:ActiveOperation = $null
+        Complete-StatusQuery -State 'Disconnected' -Succeeded $true -TimedOut $false
+        Assert-Equal 'CompanyNetwork' $script:ApplicationState 'a verified automatic disconnect must enter company network mode'
+        Assert-Equal '#7A7A7A' (Get-TrayPresentation -State $script:ApplicationState).Color 'a verified automatic disconnect must be grey rather than red'
+        Complete-StatusQuery -State 'Disconnected' -Succeeded $true -TimedOut $false
+        Assert-Equal 'CompanyNetwork' $script:ApplicationState 'subsequent status polls must preserve the company network explanation'
+        Invoke-TrayAction
+        Assert-Equal 1 $script:CompanyTestCommands.Count 'clicking the tray on the company network must not start a connection'
+
+        $script:CompanyTestSnapshots = @($wifiSnapshot)
+        Update-CompanyNetworkStatus -Force
+        Invoke-CompanyNetworkPolicy
+        Assert-Equal 'InitialDisconnected' $script:ApplicationState 'leaving the company network must restore the ordinary disconnected state'
+        Assert-Equal 'Connect' (Get-TrayActionKind -State $script:ApplicationState) 'Connect must become available after leaving the company network'
+        Assert-Equal 1 $script:CompanyTestCommands.Count 'leaving the company network must not automatically connect'
+
+        $script:Settings.AutoDisconnectOnCompanyNetwork = $false
+        $script:CompanyTestSnapshots = @($companyWifi)
+        $script:ApplicationState = 'Connected'
+        Update-CompanyNetworkStatus -Force
+        Invoke-CompanyNetworkPolicy
+        Assert-Equal 'Connected' $script:ApplicationState 'disabling the feature must leave an active VPN alone even with a matching suffix'
+        Assert-Equal 1 $script:CompanyTestCommands.Count 'a disabled rule must not issue commands'
+
+        $script:Settings.AutoDisconnectOnCompanyNetwork = $true
+        $script:ApplicationState = 'Connecting'
+        $script:ActiveOperation = [pscustomobject]@{ Name = 'Connect'; Transport = 'Process' }
+        Update-CompanyNetworkStatus -Force
+        Invoke-CompanyNetworkPolicy
+        Assert-Equal 'Connect' $script:CompanyTestStopped[1] 'arriving during authentication must stop the pending connect process'
+        Assert-Equal 2 $script:CompanyTestCommands.Count 'a pending connect must also be cancelled through Cisco disconnect'
+        $script:ActiveOperation = $null
+        Complete-DisconnectVerification -Outcome 'Connected'
+        Assert-Equal 'Connected' $script:ApplicationState 'a failed automatic disconnect must not pretend the VPN is off'
+        Assert-Equal 'Disconnect failed; still connected' $script:StateDetail 'failed automatic disconnect must explain the real state'
+        Invoke-CompanyNetworkPolicy
+        Assert-Equal 2 $script:CompanyTestCommands.Count 'failed automatic disconnects must have a retry cooldown'
+        Invoke-CompanyNetworkPolicy -Now ([DateTime]::UtcNow.AddSeconds(31))
+        Assert-Equal 3 $script:CompanyTestCommands.Count 'automatic disconnect may retry after the cooldown'
+        $script:ActiveOperation = $null
+        Complete-DisconnectVerification -Outcome 'Unavailable'
+        Assert-Equal 'DisconnectedError' $script:ApplicationState 'an unverified disconnect must retain a visible error'
+        Assert-Equal 'Disconnect result unavailable' $script:StateDetail 'an unverified automatic disconnect must describe the failed verification'
+
+        $script:CompanyProbeThrows = $true
+        $script:ApplicationState = 'Connected'
+        Update-CompanyNetworkStatus -Force
+        Invoke-CompanyNetworkPolicy
+        Assert-Equal $false $script:CompanyNetworkDetected 'an unavailable adapter probe must not claim the company network is present'
+        Assert-Equal 3 $script:CompanyTestCommands.Count 'an unavailable adapter probe must never trigger a disconnect'
+        $script:CompanyProbeThrows = $false
+        $script:CompanyTestSnapshots = @($tunnelSnapshot)
+        Update-CompanyNetworkStatus -Force
+        Invoke-CompanyNetworkPolicy
+        Assert-Equal 3 $script:CompanyTestCommands.Count 'a matching virtual adapter alone must not disconnect an active VPN'
+
+        $script:CompanyTestSnapshots = @($companyWifi)
+        $script:ApplicationState = 'InitialDisconnected'
+        Update-CompanyNetworkStatus -Force
+        Invoke-CompanyNetworkPolicy
+        Assert-Equal 'CompanyNetwork' $script:ApplicationState 'starting disconnected on the company network must show the neutral company state'
+        Assert-Equal 3 $script:CompanyTestCommands.Count 'an already disconnected VPN must not need another disconnect command'
+        $script:Settings.CompanyDnsSuffix = 'other.example.com'
+        Update-CompanyNetworkStatus -Force
+        Assert-Equal 'InitialDisconnected' $script:ApplicationState 'editing the suffix to a different network must remove company network mode'
+
+        $script:Settings.CompanyDnsSuffix = 'office.example.com'
+        $script:ApplicationState = 'Connecting'
+        Update-CompanyNetworkStatus -Force
+        Invoke-CompanyNetworkPolicy
+        Assert-Equal 4 $script:CompanyTestCommands.Count 'Cisco-owned reconnects must also be stopped on the company network'
+        $script:ActiveOperation = $null
+        $script:CompanyTestSnapshots = @($wifiSnapshot)
+        Update-CompanyNetworkStatus -Force
+        Complete-DisconnectVerification -Outcome 'Success'
+        Assert-Equal 'InitialDisconnected' $script:ApplicationState 'leaving during disconnect verification must finish in ordinary grey disconnected state'
+
+        $script:CompanyTestSnapshots = @($companyWifi)
+        $script:ApplicationState = 'Connected'
+        Update-CompanyNetworkStatus -Force
+        Set-ApplicationStateFromCiscoState -State 'Disconnected'
+        Assert-Equal 'CompanyNetwork' $script:ApplicationState 'a Cisco disconnect event on the company network must not be misreported as connection loss'
+    }
+    finally {
+        Set-Item -LiteralPath 'Function:\Get-NetworkInterfaceSnapshot' -Value $originalSnapshotProbe
+        Set-Item -LiteralPath 'Function:\Start-CliOperation' -Value $originalCliStarter
+        Set-Item -LiteralPath 'Function:\Stop-CliProcess' -Value $originalCliStopper
+        $script:CompanyNetworkDetected = $false
+        $script:NextCompanyNetworkCheck = [DateTime]::MinValue
+        $script:NextCompanyDisconnectAttempt = [DateTime]::MinValue
+        $script:ActiveOperation = $null
+    }
 }
 finally {
     $script:InstallDirectory = $originalInstallDirectory
@@ -518,15 +716,15 @@ finally {
 $originalProgramFiles = $env:ProgramFiles
 $originalProgramFilesX86 = ${env:ProgramFiles(x86)}
 $originalProgramW6432 = $env:ProgramW6432
-$missingCiscoRoot = Join-Path ([IO.Path]::GetTempPath()) ('VpnCliTray.Missing.' + [Guid]::NewGuid().ToString('N'))
-$testCiscoRoot = Join-Path ([IO.Path]::GetTempPath()) ('VpnCliTray.Cisco.' + [Guid]::NewGuid().ToString('N'))
+$missingCiscoRoot = Join-Path ([IO.Path]::GetTempPath()) ('TrayTunnel.Missing.' + [Guid]::NewGuid().ToString('N'))
+$testCiscoRoot = Join-Path ([IO.Path]::GetTempPath()) ('TrayTunnel.Cisco.' + [Guid]::NewGuid().ToString('N'))
 $secureClientDirectory = Join-Path $testCiscoRoot 'Cisco\Cisco Secure Client'
 $legacyClientDirectory = Join-Path $testCiscoRoot 'Cisco\Cisco AnyConnect Secure Mobility Client'
 $secureCliPath = Join-Path $secureClientDirectory 'vpncli.exe'
 $legacyCliPath = Join-Path $legacyClientDirectory 'vpncli.exe'
 $secureUiPath = Join-Path $secureClientDirectory 'UI\csc_ui.exe'
 $legacyUiPath = Join-Path $legacyClientDirectory 'vpnui.exe'
-$pathSettingsDirectory = Join-Path ([IO.Path]::GetTempPath()) ('VpnCliTray.PathSettings.' + [Guid]::NewGuid().ToString('N'))
+$pathSettingsDirectory = Join-Path ([IO.Path]::GetTempPath()) ('TrayTunnel.PathSettings.' + [Guid]::NewGuid().ToString('N'))
 try {
     New-Item -ItemType Directory -Path $secureClientDirectory -Force | Out-Null
     New-Item -ItemType Directory -Path $legacyClientDirectory -Force | Out-Null
@@ -565,7 +763,7 @@ try {
 
     $script:InstallDirectory = $pathSettingsDirectory
     $script:SettingsPath = Join-Path $pathSettingsDirectory 'settings.json'
-    $script:LogPath = Join-Path $pathSettingsDirectory 'VpnCliTray.log'
+    $script:LogPath = Join-Path $pathSettingsDirectory 'TrayTunnel.log'
     $migrationSettings = [pscustomobject]@{
         SchemaVersion      = $script:SettingsSchemaVersion
         VpnAddress        = 'vpn.example.com'
@@ -595,7 +793,7 @@ finally {
     }
 }
 
-$atomicCopyDirectory = Join-Path ([IO.Path]::GetTempPath()) ('VpnCliTray.AtomicCopy.' + [Guid]::NewGuid().ToString('N'))
+$atomicCopyDirectory = Join-Path ([IO.Path]::GetTempPath()) ('TrayTunnel.AtomicCopy.' + [Guid]::NewGuid().ToString('N'))
 try {
     [void][IO.Directory]::CreateDirectory($atomicCopyDirectory)
     $atomicSourcePath = Join-Path $atomicCopyDirectory 'source.ps1'
@@ -608,7 +806,7 @@ try {
     [IO.File]::WriteAllText($atomicSourcePath, 'second version')
     Copy-FileAtomically -SourcePath $atomicSourcePath -DestinationPath $atomicDestinationPath
     Assert-Equal 'second version' ([IO.File]::ReadAllText($atomicDestinationPath)) 'an atomic update must replace the complete destination'
-    Assert-Equal 0 @(Get-ChildItem -LiteralPath $atomicCopyDirectory -Filter 'VpnCliTray.install.*' -File).Count 'successful atomic copies must remove their staging and backup files'
+    Assert-Equal 0 @(Get-ChildItem -LiteralPath $atomicCopyDirectory -Filter 'TrayTunnel.install.*' -File).Count 'successful atomic copies must remove their staging and backup files'
 
     [IO.File]::WriteAllText($atomicDestinationPath, 'stable version')
     $missingAtomicSourcePath = Join-Path $atomicCopyDirectory 'missing.ps1'
@@ -623,7 +821,7 @@ finally {
     }
 }
 
-$tempShortcutPath = Join-Path ([IO.Path]::GetTempPath()) ('VpnCliTray.Tests.' + [Guid]::NewGuid().ToString('N') + '.lnk')
+$tempShortcutPath = Join-Path ([IO.Path]::GetTempPath()) ('TrayTunnel.Tests.' + [Guid]::NewGuid().ToString('N') + '.lnk')
 try {
     New-AppShortcut -ShortcutPath $tempShortcutPath -ScriptPath $scriptPath
     Assert-True (Test-AppShortcutOwned -ShortcutPath $tempShortcutPath -ScriptPath $scriptPath) 'a shortcut created by the app must be recognized as owned'
@@ -642,10 +840,10 @@ finally {
     }
 }
 
-$migrationTestRoot = Join-Path ([IO.Path]::GetTempPath()) ('VpnCliTray.Migration.' + [Guid]::NewGuid().ToString('N'))
+$migrationTestRoot = Join-Path ([IO.Path]::GetTempPath()) ('TrayTunnel.Migration.' + [Guid]::NewGuid().ToString('N'))
 try {
     $legacyInstallDirectory = Join-Path $migrationTestRoot 'AnyConnectTray'
-    $newInstallDirectory = Join-Path $migrationTestRoot 'VpnCliTray'
+    $newInstallDirectory = Join-Path $migrationTestRoot 'TrayTunnel'
     [void][IO.Directory]::CreateDirectory($legacyInstallDirectory)
     [void][IO.Directory]::CreateDirectory($newInstallDirectory)
 
@@ -654,10 +852,10 @@ try {
     $legacyLogPath = Join-Path $legacyInstallDirectory 'AnyConnectTray.log'
     $legacyStartMenuShortcutPath = Join-Path $migrationTestRoot 'AnyConnect Tray Start.lnk'
     $legacyDesktopShortcutPath = Join-Path $migrationTestRoot 'AnyConnect Tray Desktop.lnk'
-    $newInstalledScriptPath = Join-Path $newInstallDirectory 'VpnCliTray.ps1'
+    $newInstalledScriptPath = Join-Path $newInstallDirectory 'TrayTunnel.ps1'
     $newSettingsPath = Join-Path $newInstallDirectory 'settings.json'
-    $newStartMenuShortcutPath = Join-Path $migrationTestRoot 'VPN CLI Tray Start.lnk'
-    $newDesktopShortcutPath = Join-Path $migrationTestRoot 'VPN CLI Tray Desktop.lnk'
+    $newStartMenuShortcutPath = Join-Path $migrationTestRoot 'TrayTunnel Start.lnk'
+    $newDesktopShortcutPath = Join-Path $migrationTestRoot 'TrayTunnel Desktop.lnk'
 
     $validLegacyScript = @'
 $script:ProductName = 'AnyConnect Tray'
@@ -680,8 +878,8 @@ if ($Uninstall) {
     New-AppShortcut -ShortcutPath $legacyDesktopShortcutPath -ScriptPath $legacyInstalledScriptPath
 
     Assert-Equal $true (Test-ApplicationScriptIdentity -Path $legacyInstalledScriptPath -ExpectedAppId 'AnyConnectTray' -ExpectedProductName 'AnyConnect Tray' -ExpectedInstalledFileName 'AnyConnectTray.ps1') 'all strict legacy identity markers must be recognized'
-    Assert-Equal $false (Test-ApplicationScriptIdentity -Path $legacyInstalledScriptPath -ExpectedAppId 'AnyConnectTray' -ExpectedProductName 'AnyConnect Tray' -ExpectedInstalledFileName 'VpnCliTray.ps1') 'a mismatched installed filename marker must fail identity recognition'
-    Assert-Equal $true (Test-ApplicationScriptIdentity -Path $scriptPath -ExpectedAppId 'VpnCliTray' -ExpectedProductName 'VPN CLI Tray' -ExpectedInstalledFileName 'VpnCliTray.ps1') 'the current script must pass strict identity recognition'
+    Assert-Equal $false (Test-ApplicationScriptIdentity -Path $legacyInstalledScriptPath -ExpectedAppId 'AnyConnectTray' -ExpectedProductName 'AnyConnect Tray' -ExpectedInstalledFileName 'TrayTunnel.ps1') 'a mismatched installed filename marker must fail identity recognition'
+    Assert-Equal $true (Test-ApplicationScriptIdentity -Path $scriptPath -ExpectedAppId 'TrayTunnel' -ExpectedProductName 'TrayTunnel' -ExpectedInstalledFileName 'TrayTunnel.ps1') 'the current script must pass strict identity recognition'
     $invalidVersionIdentityPath = Join-Path $migrationTestRoot 'Invalid version legacy.ps1'
     [IO.File]::WriteAllText($invalidVersionIdentityPath, $validLegacyScript.Replace('0.1.8', 'not-semver'))
     Assert-Equal $false (Test-ApplicationScriptIdentity -Path $invalidVersionIdentityPath -ExpectedAppId 'AnyConnectTray' -ExpectedProductName 'AnyConnect Tray' -ExpectedInstalledFileName 'AnyConnectTray.ps1') 'an invalid SemVer marker must fail identity recognition'
@@ -948,6 +1146,8 @@ finally {
         [IO.Directory]::Delete($migrationTestRoot, $true)
     }
 }
+
+. (Join-Path $PSScriptRoot 'Test-Upgrades.ps1')
 
 Write-Host "Passed $script:Passed offline assertions."
 

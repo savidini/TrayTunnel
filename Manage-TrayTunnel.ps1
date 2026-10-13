@@ -2,15 +2,15 @@
 
 <#
 .SYNOPSIS
-    Installs, updates, checks, or removes VPN CLI Tray for the current user.
+    Installs, updates, checks, or removes TrayTunnel for the current user.
 
 .DESCRIPTION
     This script is designed to be usable both from disk and as a small HTTPS
     bootstrap. It downloads a versioned release manifest and application script,
     verifies the declared size and SHA-256 hash, checks that the script parses,
-    and delegates lifecycle changes to VpnCliTray.ps1.
+    and delegates lifecycle changes to TrayTunnel.ps1.
 
-    VPN CLI Tray is a per-user tray application, not a Windows service. This
+    TrayTunnel is a per-user tray application, not a Windows service. This
     manager never requests elevation and never installs, removes, or changes Cisco
     AnyConnect, Cisco Secure Client, or Cisco VPN agent services.
 #>
@@ -27,7 +27,7 @@ param(
     [string]$Version,
 
     [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
-    [string]$Repository = 'savidini/VpnCliTray',
+    [string]$Repository = 'savidini/TrayTunnel',
 
     [uri]$ReleaseBaseUri,
 
@@ -37,14 +37,14 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$script:ProductName = 'VPN CLI Tray'
-$script:AppId = 'VpnCliTray'
-$script:ApplicationAssetName = 'VpnCliTray.ps1'
-$script:ManifestAssetName = 'VpnCliTray.release.json'
+$script:ProductName = 'TrayTunnel'
+$script:AppId = 'TrayTunnel'
+$script:ApplicationAssetName = 'TrayTunnel.ps1'
+$script:ManifestAssetName = 'TrayTunnel.release.json'
 $script:ManifestSchemaVersion = 1
 $script:MaximumManifestBytes = 65536
 $script:MaximumApplicationBytes = 1048576
-$script:InstalledScriptPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'VpnCliTray\VpnCliTray.ps1'
+$script:InstalledScriptPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'TrayTunnel\TrayTunnel.ps1'
 $script:LegacyAppId = 'AnyConnectTray'
 $script:LegacyInstalledScriptPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'AnyConnectTray\AnyConnectTray.ps1'
 $script:RunKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
@@ -74,7 +74,7 @@ function Assert-ProcessNotElevated {
 
     if ($IsElevated) {
         throw (
-            'VPN CLI Tray is a per-user application and refuses to run with administrator rights. ' +
+            'TrayTunnel is a per-user application and refuses to run with administrator rights. ' +
             'Open a normal (non-Administrator) Windows PowerShell window and try again.'
         )
     }
@@ -327,7 +327,7 @@ function Invoke-DownloadFile {
                 $request.MaximumAutomaticRedirections = 8
                 $request.Timeout = $TimeoutSeconds * 1000
                 $request.ReadWriteTimeout = $TimeoutSeconds * 1000
-                $request.UserAgent = 'VpnCliTray-Manager'
+                $request.UserAgent = 'TrayTunnel-Manager'
 
                 $response = [Net.HttpWebResponse]$request.GetResponse()
                 $finalUri = Get-ResponseUri -WebResponse $response -FallbackUri $Uri
@@ -530,7 +530,7 @@ function Assert-ReleasePayload {
 }
 
 function New-ManagerTemporaryDirectory {
-    $path = Join-Path ([IO.Path]::GetTempPath()) ('VpnCliTray.Manager.' + [Guid]::NewGuid().ToString('N'))
+    $path = Join-Path ([IO.Path]::GetTempPath()) ('TrayTunnel.Manager.' + [Guid]::NewGuid().ToString('N'))
     [void][IO.Directory]::CreateDirectory($path)
     return $path
 }
@@ -675,7 +675,9 @@ function Test-StringAssignmentAst {
 function Test-LegacyInstalledPathAssignmentAst {
     param(
         [Parameter(Mandatory = $true)]
-        [Management.Automation.Language.AssignmentStatementAst]$Assignment
+        [Management.Automation.Language.AssignmentStatementAst]$Assignment,
+
+        [string]$ExpectedFileName = 'AnyConnectTray.ps1'
     )
 
     if ($Assignment.Operator -ne [Management.Automation.Language.TokenKind]::Equals -or
@@ -705,7 +707,7 @@ function Test-LegacyInstalledPathAssignmentAst {
             [StringComparison]::OrdinalIgnoreCase
         ) -and
         $installedFileName -is [Management.Automation.Language.StringConstantExpressionAst] -and
-        $installedFileName.Value -ceq 'AnyConnectTray.ps1'
+        $installedFileName.Value -ceq $ExpectedFileName
     )
 }
 
@@ -782,12 +784,19 @@ function Test-UninstallDispatchAst {
 }
 
 function Test-LegacyApplicationScriptOwned {
-    if (-not (Test-Path -LiteralPath $script:LegacyInstalledScriptPath -PathType Leaf)) {
+    param(
+        [string]$Path = $script:LegacyInstalledScriptPath,
+        [string]$ExpectedAppId = 'AnyConnectTray',
+        [string]$ExpectedProductName = 'AnyConnect Tray',
+        [string]$ExpectedFileName = 'AnyConnectTray.ps1'
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         return $false
     }
 
     try {
-        $legacyFile = Get-Item -LiteralPath $script:LegacyInstalledScriptPath -Force
+        $legacyFile = Get-Item -LiteralPath $Path -Force
         $legacyDirectory = Get-Item -LiteralPath $legacyFile.DirectoryName -Force
         if (($legacyFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
             ($legacyDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
@@ -821,9 +830,9 @@ function Test-LegacyApplicationScriptOwned {
             return $false
         }
 
-        if (-not (Test-StringAssignmentAst -Assignment $productAssignments[0] -ExpectedValue 'AnyConnect Tray') -or
-            -not (Test-StringAssignmentAst -Assignment $appIdAssignments[0] -ExpectedValue 'AnyConnectTray') -or
-            -not (Test-LegacyInstalledPathAssignmentAst -Assignment $installedPathAssignments[0])) {
+        if (-not (Test-StringAssignmentAst -Assignment $productAssignments[0] -ExpectedValue $ExpectedProductName) -or
+            -not (Test-StringAssignmentAst -Assignment $appIdAssignments[0] -ExpectedValue $ExpectedAppId) -or
+            -not (Test-LegacyInstalledPathAssignmentAst -Assignment $installedPathAssignments[0] -ExpectedFileName $ExpectedFileName)) {
             return $false
         }
 
@@ -857,6 +866,29 @@ function Test-LegacyApplicationScriptOwned {
     }
 }
 
+function Get-LegacyInstallationCandidates {
+    [pscustomobject]@{
+        AppId = 'VpnCliTray'
+        ProductName = 'VPN CLI Tray'
+        FileName = 'VpnCliTray.ps1'
+        Path = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'VpnCliTray\VpnCliTray.ps1'
+    }
+    [pscustomobject]@{
+        AppId = $script:LegacyAppId
+        ProductName = 'AnyConnect Tray'
+        FileName = 'AnyConnectTray.ps1'
+        Path = $script:LegacyInstalledScriptPath
+    }
+}
+
+function Get-RecognizedLegacyInstallations {
+    foreach ($candidate in (Get-LegacyInstallationCandidates)) {
+        if (Test-LegacyApplicationScriptOwned -Path $candidate.Path -ExpectedAppId $candidate.AppId -ExpectedProductName $candidate.ProductName -ExpectedFileName $candidate.FileName) {
+            $candidate
+        }
+    }
+}
+
 function Show-InstallationStatus {
     $installedScriptPath = $script:InstalledScriptPath
     $installedProductName = $script:ProductName
@@ -864,16 +896,20 @@ function Show-InstallationStatus {
     $legacyInstallation = $false
 
     if (-not (Test-Path -LiteralPath $installedScriptPath -PathType Leaf)) {
-        if (Test-LegacyApplicationScriptOwned) {
-            $installedScriptPath = $script:LegacyInstalledScriptPath
-            $installedProductName = 'AnyConnect Tray (legacy)'
-            $startupValueName = $script:LegacyAppId
+        $legacyInstallations = @(Get-RecognizedLegacyInstallations)
+        if ($legacyInstallations.Count -gt 0) {
+            $previous = $legacyInstallations[0]
+            $installedScriptPath = $previous.Path
+            $installedProductName = "$($previous.ProductName) (previous name)"
+            $startupValueName = $previous.AppId
             $legacyInstallation = $true
         }
         else {
             Write-Host "$($script:ProductName) is not installed for the current user."
-            if (Test-Path -LiteralPath $script:LegacyInstalledScriptPath -PathType Leaf) {
-                Write-Warning "An unrecognized file exists at the legacy path and was not treated as an installation: $($script:LegacyInstalledScriptPath)"
+            foreach ($candidate in (Get-LegacyInstallationCandidates)) {
+                if (Test-Path -LiteralPath $candidate.Path -PathType Leaf) {
+                    Write-Warning "An unrecognized file exists at a previous installation path and was left unchanged: $($candidate.Path)"
+                }
             }
             return
         }
@@ -916,7 +952,7 @@ function Read-ManagerAction {
     switch -Regex ($selection) {
         '^(1|i|install|update)$' { return 'Install' }
         '^(2|u|uninstall|remove)$' {
-            Write-Warning 'Uninstall deletes VPN CLI Tray settings, including the encrypted saved password, and its logs. It also removes a recognized legacy AnyConnect Tray installation.'
+            Write-Warning 'Uninstall deletes TrayTunnel settings, including the encrypted saved password, and its logs. It also removes recognized installations under previous names.'
             $confirmation = (Read-Host "Type 'uninstall' to continue").Trim()
             if ($confirmation -ceq 'uninstall') { return 'Uninstall' }
             return 'Cancel'
@@ -993,10 +1029,10 @@ function Invoke-Uninstall {
         }
     }
 
-    if (Test-LegacyApplicationScriptOwned) {
-        Write-Host 'A recognized legacy AnyConnect Tray installation was found.'
+    if (@(Get-RecognizedLegacyInstallations).Count -gt 0) {
+        Write-Host 'A recognized installation under a previous name was found.'
     }
-    Write-Host 'Downloading a verified VPN CLI Tray application copy for cleanup.'
+    Write-Host 'Downloading a verified TrayTunnel application copy for cleanup.'
     $payload = Get-VerifiedReleasePayload `
         -ReleaseRootUri $ReleaseRootUri `
         -RequestedVersion $RequestedVersion `
@@ -1011,7 +1047,7 @@ function Invoke-Uninstall {
     }
 }
 
-function Invoke-VpnCliTrayManager {
+function Invoke-TrayTunnelManager {
     param(
         [Parameter(Mandatory = $true)]
         [string]$RequestedAction,
@@ -1105,7 +1141,7 @@ if ($MyInvocation.InvocationName -eq '.') {
     return
 }
 
-Invoke-VpnCliTrayManager `
+Invoke-TrayTunnelManager `
     -RequestedAction $Action `
     -RepositoryName $Repository `
     -RequestedVersion $Version `
