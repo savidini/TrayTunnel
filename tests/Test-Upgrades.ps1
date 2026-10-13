@@ -52,7 +52,7 @@ try {
         }
     }
 
-    foreach ($scenario in @('VpnCliTray', 'AnyConnectTray', 'Both', 'Existing', 'Fresh', 'InvalidNew', 'Interrupted', 'RunningLegacy', 'UnknownRunning', 'Unrecognized')) {
+    foreach ($scenario in @('VpnCliTray', 'AnyConnectTray', 'Both', 'Existing', 'Fresh', 'InvalidNew', 'Interrupted', 'RunningLegacy', 'RunningCurrent', 'UnknownRunning', 'Unrecognized')) {
         $scenarioRoot = Join-Path $upgradeRoot $scenario
         [void][IO.Directory]::CreateDirectory($scenarioRoot)
         $script:InstallDirectory = Join-Path $scenarioRoot 'TrayTunnel'
@@ -65,7 +65,7 @@ try {
         $script:UpgradeStartup = @{}
         $script:UpgradeValidationFails = $false
         $script:UpgradeStopCalls = 0
-        $script:UpgradeMayStop = $scenario -eq 'RunningLegacy'
+        $script:UpgradeMayStop = $scenario -in @('RunningLegacy', 'RunningCurrent')
         $script:UpgradeHeldMutex = $null
         $script:UpgradeMutexNames = @('new', 'previous', 'oldest') | ForEach-Object { 'Local\TrayTunnel.UpgradeTests.{0}.{1}' -f [Guid]::NewGuid().ToString('N'), $_ }
         $script:UpgradeLegacyParameters = @()
@@ -85,7 +85,7 @@ try {
                 DesktopShortcutPath = Join-Path $scenarioRoot "$fixtureProductName Desktop.lnk"
             }
             $script:UpgradeLegacyParameters += $parameters
-            if ($scenario -eq 'Fresh' -or
+            if ($scenario -in @('Fresh', 'RunningCurrent') -or
                 ($scenario -eq 'VpnCliTray' -and $identity -ne 'VpnCliTray') -or
                 ($scenario -eq 'AnyConnectTray' -and $identity -ne 'AnyConnectTray')) { continue }
 
@@ -126,7 +126,7 @@ if ($Uninstall) { Uninstall-App }
             }
         }
 
-        if ($scenario -eq 'Existing') {
+        if ($scenario -in @('Existing', 'RunningCurrent')) {
             [void][IO.Directory]::CreateDirectory($script:InstallDirectory)
             Copy-Item -LiteralPath $scriptPath -Destination $script:InstalledScriptPath
             $existingDocument = '{"SchemaVersion":1,"VpnAddress":"existing.example.com"}'
@@ -156,8 +156,9 @@ if ($Uninstall) { Uninstall-App }
             finally { $script:UpgradeHeldMutex.ReleaseMutex(); $script:UpgradeHeldMutex.Dispose(); $script:UpgradeHeldMutex = $null }
             continue
         }
-        if ($scenario -eq 'RunningLegacy') {
-            $script:UpgradeHeldMutex = New-Object Threading.Mutex($true, $script:UpgradeMutexNames[1])
+        if ($scenario -in @('RunningLegacy', 'RunningCurrent')) {
+            $mutexIndex = if ($scenario -eq 'RunningCurrent') { 0 } else { 1 }
+            $script:UpgradeHeldMutex = New-Object Threading.Mutex($true, $script:UpgradeMutexNames[$mutexIndex])
         }
         if ($scenario -eq 'Interrupted') {
             $script:UpgradeValidationFails = $true
@@ -172,7 +173,7 @@ if ($Uninstall) { Uninstall-App }
         }
 
         Install-App -CreateDesktopShortcut $false -SkipLaunch $true
-        Assert-Equal ([int]($scenario -eq 'RunningLegacy')) $script:UpgradeStopCalls 'installation must close a recognized running tray only when a lock prevents the upgrade'
+        Assert-Equal ([int]($scenario -in @('RunningLegacy', 'RunningCurrent'))) $script:UpgradeStopCalls 'installation must close a recognized running tray only when a lock prevents the upgrade'
         Assert-Equal $true (Test-FileContentsEqual -FirstPath $scriptPath -SecondPath $script:InstalledScriptPath) 'installation must publish the TrayTunnel application script'
         Assert-Equal $true (Test-AppShortcutOwned -ShortcutPath $script:StartMenuShortcutPath -ScriptPath $script:InstalledScriptPath) 'installation must create a TrayTunnel Start Menu shortcut'
         if ($scenario -eq 'Unrecognized') {
@@ -197,7 +198,7 @@ if ($Uninstall) { Uninstall-App }
             }
             continue
         }
-        if ($scenario -eq 'Existing') {
+        if ($scenario -in @('Existing', 'RunningCurrent')) {
             Assert-Equal $existingDocument ([IO.File]::ReadAllText($script:SettingsPath)) 'existing TrayTunnel settings must win over both previous names'
         }
         else {
@@ -208,7 +209,7 @@ if ($Uninstall) { Uninstall-App }
             Assert-Equal 'office.example.com' $upgradedSettings.CompanyDnsSuffix 'the company DNS suffix must survive the rename'
             Assert-Equal (Unprotect-Password -EncryptedPassword $ciphertext) (Unprotect-Password -EncryptedPassword $upgradedSettings.PasswordEncrypted) 'saved credentials must still decrypt after moving the settings file'
         }
-        $expectedStartup = $scenario -in @('AnyConnectTray', 'Existing')
+        $expectedStartup = $scenario -in @('AnyConnectTray', 'Existing', 'RunningCurrent')
         Assert-Equal $expectedStartup $script:UpgradeStartup.ContainsKey('TrayTunnel') 'upgrades must preserve enabled and disabled startup choices'
         Assert-Equal (-not $expectedStartup) (Test-AppShortcutOwned -ShortcutPath $script:DesktopShortcutPath -ScriptPath $script:InstalledScriptPath) 'upgrades must preserve Desktop shortcut choices'
         foreach ($parameters in $script:UpgradeLegacyParameters) {

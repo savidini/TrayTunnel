@@ -57,7 +57,7 @@ $shutdownOther.CreationDate = $shutdownHost.CreationDate.AddSeconds(-1)
 Assert-Equal $false (Test-TrayChildCliProcess -Snapshot $shutdownOther -Parent $shutdownHost -CliPaths @($shutdownCliPath)) 'a child from an earlier reuse of the parent PID must remain untouched'
 
 $shutdownSavedFunctions = @{}
-foreach ($shutdownFunction in @('Get-CiscoExecutablePaths', 'Test-ApplicationScriptIdentity', 'Test-ProcessOwnedByCurrentUser', 'Stop-VerifiedProcessSnapshot', 'Send-TrayExitRequest')) {
+foreach ($shutdownFunction in @('Get-CiscoExecutablePaths', 'Test-ApplicationScriptIdentity', 'Test-ProcessOwnedByCurrentUser', 'Stop-VerifiedProcessSnapshot', 'Send-TrayExitRequest', 'Test-AppMutexExists', 'Wait-AppMutexRelease')) {
     $shutdownSavedFunctions[$shutdownFunction] = (Get-Item -LiteralPath "Function:\$shutdownFunction").ScriptBlock
 }
 try {
@@ -77,11 +77,46 @@ try {
     function Test-ProcessOwnedByCurrentUser { param($Snapshot) return $Snapshot.ProcessId -in @(123456, 123457) }
     function Stop-VerifiedProcessSnapshot { param($Snapshot, [switch]$ExitRequested) $shutdownStopped.Add($Snapshot.ProcessId) }
     function Send-TrayExitRequest { param($ApplicationId) $shutdownRequested.Add($ApplicationId); return $false }
-    Stop-RunningInstalledTrays -LegacyStates @([pscustomobject]@{
+    $shutdownLegacyInstallations = @([pscustomobject]@{
         AppId = 'VpnCliTray'; ProductName = 'VPN CLI Tray'; InstalledFileName = 'VpnCliTray.ps1'; InstalledScriptPath = $shutdownTrayPath
     })
+    Stop-RunningInstalledTrays -LegacyStates $shutdownLegacyInstallations
     Assert-Equal '123456,123457' ($shutdownStopped -join ',') 'automatic shutdown must stop only the verified user-owned tray and its user-owned listener'
     Assert-Equal 'VpnCliTray' $shutdownRequested[0] 'automatic shutdown must first request a cooperative tray exit'
+
+    # A running current version must close even when Windows cannot expose
+    # its process metadata. The old process-first implementation fails here.
+    $shutdownStopped.Clear()
+    $shutdownRequested.Clear()
+    function Test-ApplicationScriptIdentity {
+        param($Path, $ExpectedAppId, $ExpectedProductName, $ExpectedInstalledFileName)
+        return $Path -eq $script:InstalledScriptPath
+    }
+    function Get-CimInstance { throw 'Process metadata is unavailable.' }
+    function Send-TrayExitRequest { param($ApplicationId) $shutdownRequested.Add($ApplicationId); return $true }
+    $script:ShutdownLocksRemaining = 2
+    function Test-AppMutexExists { $script:ShutdownLocksRemaining--; return $script:ShutdownLocksRemaining -gt 0 }
+    Stop-RunningInstalledTrays -LegacyStates $shutdownLegacyInstallations
+    Assert-Equal 'TrayTunnel' ($shutdownRequested -join ',') 'reinstall must ask the current tray to exit without querying process metadata'
+    Assert-Equal 0 $shutdownStopped.Count 'a cooperative exit must not force-stop a process'
+    Assert-Equal 0 $script:ShutdownLocksRemaining 'reinstall must wait for the tray locks to be released'
+
+    function Test-AppMutexExists { return $true }
+    Assert-Equal $false (Wait-AppMutexRelease -TimeoutMilliseconds 0) 'an unresponsive tray must not be reported as closed'
+    function Wait-AppMutexRelease { return $false }
+    $shutdownCurrentHost = $shutdownHost.PSObject.Copy()
+    $shutdownCurrentHost.CommandLine = $shutdownHost.CommandLine.Replace($shutdownTrayPath, $script:InstalledScriptPath)
+    function Get-CimInstance { return @($shutdownCurrentHost, $shutdownChild) }
+    Stop-RunningInstalledTrays -LegacyStates $shutdownLegacyInstallations
+    Assert-Equal '123456,123457' ($shutdownStopped -join ',') 'an unresponsive current tray must use the verified process fallback'
+
+    $shutdownStopped.Clear()
+    $shutdownRequested.Clear()
+    function Test-ApplicationScriptIdentity { return $false }
+    function Get-CimInstance { throw 'Unrecognized installations must not trigger process discovery.' }
+    Stop-RunningInstalledTrays -LegacyStates $shutdownLegacyInstallations
+    Assert-Equal 0 $shutdownRequested.Count 'unrecognized applications must never receive an exit request'
+    Assert-Equal 0 $shutdownStopped.Count 'unrecognized applications must never be stopped'
 }
 finally {
     foreach ($shutdownFunction in $shutdownSavedFunctions.Keys) { Set-Item -LiteralPath "Function:\$shutdownFunction" -Value $shutdownSavedFunctions[$shutdownFunction] }

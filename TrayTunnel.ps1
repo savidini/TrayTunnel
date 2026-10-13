@@ -36,7 +36,7 @@ $ErrorActionPreference = 'Stop'
 
 $script:ProductName = 'TrayTunnel'
 $script:AppId = 'TrayTunnel'
-$script:Version = '0.3.1'
+$script:Version = '0.3.2'
 $script:SettingsSchemaVersion = 1
 $script:RunKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $script:LocalAppData = [Environment]::GetFolderPath('LocalApplicationData')
@@ -1345,6 +1345,17 @@ function Stop-VerifiedProcessSnapshot {
     finally { $process.Dispose() }
 }
 
+function Wait-AppMutexRelease {
+    param([ValidateRange(0, 60000)][int]$TimeoutMilliseconds = 5000)
+
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        if (-not (Test-AppMutexExists)) { return $true }
+        if ($timer.ElapsedMilliseconds -ge $TimeoutMilliseconds) { return $false }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
 function Stop-RunningInstalledTrays {
     param([Parameter(Mandatory = $true)][object[]]$LegacyStates)
 
@@ -1354,6 +1365,23 @@ function Stop-RunningInstalledTrays {
         InstalledFileName = 'TrayTunnel.ps1'
         InstalledScriptPath = $script:InstalledScriptPath
     }) + @($LegacyStates)
+    $recognizedInstallations = @($installations | Where-Object {
+        Test-ApplicationScriptIdentity -Path $_.InstalledScriptPath -ExpectedAppId $_.AppId -ExpectedProductName $_.ProductName -ExpectedInstalledFileName $_.InstalledFileName
+    })
+    if ($recognizedInstallations.Count -eq 0) { return }
+
+    # The tray's per-user, per-session exit channel does not depend on CIM
+    # exposing its command line or executable path to the installer.
+    $exitRequested = $false
+    foreach ($installation in $recognizedInstallations) {
+        if (Send-TrayExitRequest -ApplicationId $installation.AppId) {
+            Write-Host "Closing $($installation.ProductName) for the upgrade. Cisco's VPN service stays running."
+            $exitRequested = $true
+        }
+    }
+    if ($exitRequested -and (Wait-AppMutexRelease)) { return }
+
+    # Older or unresponsive trays still require exact process verification.
     $snapshots = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'vpncli.exe'" -ErrorAction Stop)
     $powerShellPath = Get-WindowsPowerShellPath
     $currentProcess = [Diagnostics.Process]::GetCurrentProcess()
@@ -1361,8 +1389,7 @@ function Stop-RunningInstalledTrays {
     finally { $currentProcess.Dispose() }
     $cliPaths = @(Get-CiscoExecutablePaths)
 
-    foreach ($installation in $installations) {
-        if (-not (Test-ApplicationScriptIdentity -Path $installation.InstalledScriptPath -ExpectedAppId $installation.AppId -ExpectedProductName $installation.ProductName -ExpectedInstalledFileName $installation.InstalledFileName)) { continue }
+    foreach ($installation in $recognizedInstallations) {
         foreach ($snapshot in $snapshots) {
             if (-not (Test-InstalledTrayProcess -Snapshot $snapshot -ScriptPath $installation.InstalledScriptPath -PowerShellPath $powerShellPath -SessionId $sessionId)) { continue }
             if (-not (Test-ProcessOwnedByCurrentUser -Snapshot $snapshot)) { continue }
@@ -1372,8 +1399,7 @@ function Stop-RunningInstalledTrays {
                 (Test-ProcessOwnedByCurrentUser -Snapshot $_)
             })
             Write-Host "Closing $($installation.ProductName) to install TrayTunnel. Cisco's VPN service stays running."
-            $requested = Send-TrayExitRequest -ApplicationId $installation.AppId
-            Stop-VerifiedProcessSnapshot -Snapshot $snapshot -ExitRequested:$requested
+            Stop-VerifiedProcessSnapshot -Snapshot $snapshot
             # Older trays cannot clean up their hidden listener after termination.
             foreach ($child in $children) { Stop-VerifiedProcessSnapshot -Snapshot $child }
         }
