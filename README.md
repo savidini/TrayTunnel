@@ -60,11 +60,11 @@ For a direct action, use the script-block form so arguments can be passed:
 & ([scriptblock]::Create((irm 'https://savidini.de/TrayTunnel/manage.ps1'))) -Action Uninstall
 ```
 
-Add `-DesktopShortcut` or `-NoLaunch` to an install command when needed. `-Action Update` is an explicit alias for the same idempotent install path. If the tray is already running, the verified file is updated on disk and the existing process remains on the old version until you choose **Exit** and open it again. An uninstall normally uses the installed local script, so it remains available when GitHub is unreachable.
+Add `-DesktopShortcut` or `-NoLaunch` to an install command when needed. `-Action Update` is an explicit alias for the same idempotent install path. The installer closes a recognized running tray in your Windows session, updates it, and starts the new version unless `-NoLaunch` is set. It does not disconnect the VPN or stop Cisco's agent service. An uninstall normally uses the installed local script, so it remains available when GitHub is unreachable.
 
 ### Upgrading from an earlier name
 
-TrayTunnel replaces **VPN CLI Tray** (`VpnCliTray`) and **AnyConnect Tray** (`AnyConnectTray`). Exit the old tray first, then run the TrayTunnel install or update command above. From a source checkout, you can also run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1`.
+TrayTunnel replaces **VPN CLI Tray** (`VpnCliTray`) and **AnyConnect Tray** (`AnyConnectTray`). Run the TrayTunnel install or update command above; the installer automatically closes a recognized old tray before migrating it. From a source checkout, you can also run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1`.
 
 The installer copies and verifies existing settings, including the encrypted password and company network rule, into `%LOCALAPPDATA%\TrayTunnel`. It preserves Start with Windows and Desktop shortcut choices, creates the TrayTunnel shortcuts, and removes recognized old scripts, startup entries, shortcuts, logs, and temporary files only after validating the new installation. Unrelated files and invalid settings are left untouched. No password re-entry is needed when upgrading under the same Windows account.
 

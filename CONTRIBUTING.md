@@ -15,7 +15,7 @@ Keep the `tests` directory tracked; continuous integration and release publishin
 
 ## Versions and releases
 
-`$script:Version` in `TrayTunnel.ps1` is the application version. Release tags must be exactly `v` followed by that version, such as `v0.3.0`. Update version-specific documentation when the version changes. The release workflow reruns both offline suites, verifies the tag, generates the release manifest, and publishes the manager and application assets.
+`$script:Version` in `TrayTunnel.ps1` is the application version. Release tags must be exactly `v` followed by that version, such as `v0.3.1`. Update version-specific documentation when the version changes. The release workflow reruns both offline suites, verifies the tag, generates the release manifest, and publishes the manager and application assets.
 
 After a successful release, the Pages workflow resolves the latest stable release and deploys its verified manager asset as `manage.ps1`. Keep the landing page in `pages/index.html`; do not commit a second manager copy. Use the workflow's manual trigger only from `main` when the existing latest release needs to be redeployed.
 

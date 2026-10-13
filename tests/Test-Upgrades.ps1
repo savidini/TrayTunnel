@@ -12,7 +12,7 @@ foreach ($name in @('InstallDirectory', 'InstalledScriptPath', 'SettingsPath', '
     $upgradeSavedVariables[$name] = (Get-Variable -Name $name -Scope Script).Value
 }
 $upgradeSavedFunctions = @{}
-foreach ($name in @('Get-LegacyMigrationStates', 'Get-AppMutexNames', 'Get-StartWithWindowsCommand', 'Set-StartWithWindows', 'Assert-NewInstallationValid')) {
+foreach ($name in @('Get-LegacyMigrationStates', 'Get-AppMutexNames', 'Get-StartWithWindowsCommand', 'Set-StartWithWindows', 'Assert-NewInstallationValid', 'Stop-RunningInstalledTrays')) {
     $upgradeSavedFunctions[$name] = (Get-Item -LiteralPath "Function:\$name").ScriptBlock
 }
 try {
@@ -42,8 +42,17 @@ try {
         if ($script:UpgradeValidationFails) { throw 'Simulated installation validation failure.' }
         & $upgradeSavedFunctions['Assert-NewInstallationValid'] @args
     }
+    function Stop-RunningInstalledTrays {
+        param($LegacyStates)
+        $script:UpgradeStopCalls++
+        if ($script:UpgradeMayStop) {
+            $script:UpgradeHeldMutex.ReleaseMutex()
+            $script:UpgradeHeldMutex.Dispose()
+            $script:UpgradeHeldMutex = $null
+        }
+    }
 
-    foreach ($scenario in @('VpnCliTray', 'AnyConnectTray', 'Both', 'Existing', 'Fresh', 'InvalidNew', 'Interrupted', 'RunningLegacy', 'Unrecognized')) {
+    foreach ($scenario in @('VpnCliTray', 'AnyConnectTray', 'Both', 'Existing', 'Fresh', 'InvalidNew', 'Interrupted', 'RunningLegacy', 'UnknownRunning', 'Unrecognized')) {
         $scenarioRoot = Join-Path $upgradeRoot $scenario
         [void][IO.Directory]::CreateDirectory($scenarioRoot)
         $script:InstallDirectory = Join-Path $scenarioRoot 'TrayTunnel'
@@ -55,6 +64,9 @@ try {
         $script:RunKeyPath = 'UpgradeTests:'
         $script:UpgradeStartup = @{}
         $script:UpgradeValidationFails = $false
+        $script:UpgradeStopCalls = 0
+        $script:UpgradeMayStop = $scenario -eq 'RunningLegacy'
+        $script:UpgradeHeldMutex = $null
         $script:UpgradeMutexNames = @('new', 'previous', 'oldest') | ForEach-Object { 'Local\TrayTunnel.UpgradeTests.{0}.{1}' -f [Guid]::NewGuid().ToString('N'), $_ }
         $script:UpgradeLegacyParameters = @()
         $legacyDocuments = @{}
@@ -133,16 +145,19 @@ if ($Uninstall) { Uninstall-App }
             }
             continue
         }
-        if ($scenario -eq 'RunningLegacy') {
-            $heldMutex = New-Object Threading.Mutex($true, $script:UpgradeMutexNames[1])
+        if ($scenario -eq 'UnknownRunning') {
+            $script:UpgradeHeldMutex = New-Object Threading.Mutex($true, $script:UpgradeMutexNames[1])
             try {
-                Assert-Throws -Because 'migration must refuse to run while a previous tray owns its mutex' -MessagePattern '*requires all current and previous tray versions*' -Operation {
+                Assert-Throws -Because 'migration must refuse to stop an unrecognized lock owner' -MessagePattern '*could not be safely closed automatically*' -Operation {
                     Install-App -CreateDesktopShortcut $false -SkipLaunch $true
                 }
                 Assert-Equal $false (Test-Path -LiteralPath $script:InstalledScriptPath) 'a running old tray must prevent migration before copying files'
             }
-            finally { $heldMutex.ReleaseMutex(); $heldMutex.Dispose() }
+            finally { $script:UpgradeHeldMutex.ReleaseMutex(); $script:UpgradeHeldMutex.Dispose(); $script:UpgradeHeldMutex = $null }
             continue
+        }
+        if ($scenario -eq 'RunningLegacy') {
+            $script:UpgradeHeldMutex = New-Object Threading.Mutex($true, $script:UpgradeMutexNames[1])
         }
         if ($scenario -eq 'Interrupted') {
             $script:UpgradeValidationFails = $true
@@ -157,6 +172,7 @@ if ($Uninstall) { Uninstall-App }
         }
 
         Install-App -CreateDesktopShortcut $false -SkipLaunch $true
+        Assert-Equal ([int]($scenario -eq 'RunningLegacy')) $script:UpgradeStopCalls 'installation must close a recognized running tray only when a lock prevents the upgrade'
         Assert-Equal $true (Test-FileContentsEqual -FirstPath $scriptPath -SecondPath $script:InstalledScriptPath) 'installation must publish the TrayTunnel application script'
         Assert-Equal $true (Test-AppShortcutOwned -ShortcutPath $script:StartMenuShortcutPath -ScriptPath $script:InstalledScriptPath) 'installation must create a TrayTunnel Start Menu shortcut'
         if ($scenario -eq 'Unrecognized') {
@@ -168,6 +184,17 @@ if ($Uninstall) { Uninstall-App }
         }
         if ($scenario -eq 'Fresh') {
             Assert-True $script:UpgradeStartup.ContainsKey('TrayTunnel') 'fresh installs must use the new startup entry'
+            $upgradePreviousLease = $script:MutexLease
+            $script:MutexLease = Enter-AppMutexSet
+            try {
+                Enable-StartupFromTray
+                Assert-Equal 0 $script:UpgradeStopCalls 'the tray startup action must reuse its locks without stopping itself'
+                Assert-Equal $true (Test-AppMutexExists) 'the tray startup action must keep its existing locks alive'
+            }
+            finally {
+                Exit-AppMutexSet -Lease $script:MutexLease
+                $script:MutexLease = $upgradePreviousLease
+            }
             continue
         }
         if ($scenario -eq 'Existing') {

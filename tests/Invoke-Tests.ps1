@@ -61,7 +61,7 @@ foreach ($powerShellFile in (Get-ChildItem -LiteralPath $repositoryRoot -Recurse
 . $scriptPath
 Assert-Equal 'TrayTunnel' $script:ProductName 'the display product name must use the neutral application identity'
 Assert-Equal 'TrayTunnel' $script:AppId 'the per-user application ID must use the neutral identity'
-Assert-Equal '0.3.0' $script:Version 'the TrayTunnel rename and company network feature must use the new release version'
+Assert-Equal '0.3.1' $script:Version 'automatic upgrade shutdown must use the new patch version'
 Assert-True ($script:InstalledScriptPath.EndsWith('\TrayTunnel\TrayTunnel.ps1')) 'the install namespace and script name must be TrayTunnel'
 Assert-True ($script:LogPath.EndsWith('\TrayTunnel\TrayTunnel.log')) 'the log namespace and file name must be TrayTunnel'
 Assert-Equal 'AnyConnectTray' $script:LegacyAppId 'the former application ID must remain available only for migration'
@@ -1148,6 +1148,7 @@ finally {
 }
 
 . (Join-Path $PSScriptRoot 'Test-Upgrades.ps1')
+. (Join-Path $PSScriptRoot 'Test-UpgradeShutdown.ps1')
 
 Write-Host "Passed $script:Passed offline assertions."
 

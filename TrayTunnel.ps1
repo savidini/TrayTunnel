@@ -36,7 +36,7 @@ $ErrorActionPreference = 'Stop'
 
 $script:ProductName = 'TrayTunnel'
 $script:AppId = 'TrayTunnel'
-$script:Version = '0.3.0'
+$script:Version = '0.3.1'
 $script:SettingsSchemaVersion = 1
 $script:RunKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $script:LocalAppData = [Environment]::GetFolderPath('LocalApplicationData')
@@ -49,6 +49,7 @@ $script:CompanyNetworkDetected = $false
 $script:NextCompanyNetworkCheck = [DateTime]::MinValue
 $script:NextCompanyDisconnectAttempt = [DateTime]::MinValue
 $script:MutexLease = $null
+$script:ExitRequest = $null
 $script:ExitMenuItem = $null
 $script:StartMenuShortcutPath = Join-Path ([Environment]::GetFolderPath('Programs')) 'TrayTunnel.lnk'
 $script:DesktopShortcutPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'TrayTunnel.lnk'
@@ -1243,6 +1244,142 @@ function Test-AppMutexExists {
     return $false
 }
 
+function Get-TrayExitEventName {
+    param([string]$ApplicationId = $script:AppId)
+    return Get-UserMutexName -ApplicationId ($ApplicationId + '-Exit')
+}
+
+function Send-TrayExitRequest {
+    param([Parameter(Mandatory = $true)][string]$ApplicationId)
+
+    $exitEvent = $null
+    try {
+        $exitEvent = [Threading.EventWaitHandle]::OpenExisting((Get-TrayExitEventName -ApplicationId $ApplicationId))
+        [void]$exitEvent.Set()
+        return $true
+    }
+    catch [Threading.WaitHandleCannotBeOpenedException] {
+        # Releases before 0.3.1 do not have a cooperative exit channel.
+        return $false
+    }
+    finally {
+        if ($null -ne $exitEvent) { $exitEvent.Dispose() }
+    }
+}
+
+function Test-InstalledTrayProcess {
+    param(
+        [Parameter(Mandatory = $true)][object]$Snapshot,
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [Parameter(Mandatory = $true)][string]$PowerShellPath,
+        [Parameter(Mandatory = $true)][int]$SessionId,
+        [int]$InstallerProcessId = $PID
+    )
+
+    if ([int]$Snapshot.ProcessId -eq $InstallerProcessId -or
+        [int]$Snapshot.SessionId -ne $SessionId -or
+        [string]$Snapshot.ExecutablePath -ine $PowerShellPath -or
+        $null -eq $Snapshot.CreationDate) { return $false }
+
+    # Match only the exact run-mode command lines emitted by our launchers.
+    # A console, installer, health check, or another script must never be stopped.
+    foreach ($noConsole in @($true, $false)) {
+        $arguments = Get-AppArguments -ScriptPath $ScriptPath -NoConsoleHost:$noConsole
+        foreach ($executable in @(('"{0}"' -f $PowerShellPath), $PowerShellPath)) {
+            if ([string]$Snapshot.CommandLine -ieq "$executable $arguments") { return $true }
+        }
+    }
+    return $false
+}
+
+function Test-TrayChildCliProcess {
+    param(
+        [Parameter(Mandatory = $true)][object]$Snapshot,
+        [Parameter(Mandatory = $true)][object]$Parent,
+        [Parameter(Mandatory = $true)][string[]]$CliPaths
+    )
+    return [int]$Snapshot.ParentProcessId -eq [int]$Parent.ProcessId -and
+        [int]$Snapshot.SessionId -eq [int]$Parent.SessionId -and
+        $null -ne $Snapshot.CreationDate -and
+        $Snapshot.CreationDate -ge $Parent.CreationDate -and
+        [string]$Snapshot.ExecutablePath -in $CliPaths
+}
+
+function Test-ProcessOwnedByCurrentUser {
+    param([Parameter(Mandatory = $true)][object]$Snapshot)
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        $owner = Invoke-CimMethod -InputObject $Snapshot -MethodName GetOwnerSid -ErrorAction Stop
+        return $owner.ReturnValue -eq 0 -and $owner.Sid -eq $identity.User.Value
+    }
+    finally { $identity.Dispose() }
+}
+
+function Stop-VerifiedProcessSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][object]$Snapshot,
+        [switch]$ExitRequested
+    )
+
+    try { $process = [Diagnostics.Process]::GetProcessById([int]$Snapshot.ProcessId) }
+    catch [ArgumentException] { return }
+    try {
+        # Open a handle before validation so PID reuse cannot change the target.
+        [void]$process.Handle
+        if ($process.HasExited) { return }
+        if ($process.MainModule.FileName -ine [string]$Snapshot.ExecutablePath -or
+            [Math]::Abs(($process.StartTime.ToUniversalTime() - $Snapshot.CreationDate.ToUniversalTime()).TotalMilliseconds) -ge 1) {
+            throw 'The running tray process changed during upgrade; no process was stopped.'
+        }
+        if ($ExitRequested -and $process.WaitForExit(5000)) { return }
+        # Closing only these client processes does not disconnect Cisco's agent.
+        $process.Kill()
+        if (-not $process.WaitForExit(5000)) { throw 'The previous tray process did not exit in time.' }
+    }
+    catch {
+        # A cooperative exit can finish while the process is being inspected.
+        if ($process.HasExited) { return }
+        throw
+    }
+    finally { $process.Dispose() }
+}
+
+function Stop-RunningInstalledTrays {
+    param([Parameter(Mandatory = $true)][object[]]$LegacyStates)
+
+    $installations = @([pscustomobject]@{
+        AppId = $script:AppId
+        ProductName = $script:ProductName
+        InstalledFileName = 'TrayTunnel.ps1'
+        InstalledScriptPath = $script:InstalledScriptPath
+    }) + @($LegacyStates)
+    $snapshots = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'vpncli.exe'" -ErrorAction Stop)
+    $powerShellPath = Get-WindowsPowerShellPath
+    $currentProcess = [Diagnostics.Process]::GetCurrentProcess()
+    try { $sessionId = $currentProcess.SessionId }
+    finally { $currentProcess.Dispose() }
+    $cliPaths = @(Get-CiscoExecutablePaths)
+
+    foreach ($installation in $installations) {
+        if (-not (Test-ApplicationScriptIdentity -Path $installation.InstalledScriptPath -ExpectedAppId $installation.AppId -ExpectedProductName $installation.ProductName -ExpectedInstalledFileName $installation.InstalledFileName)) { continue }
+        foreach ($snapshot in $snapshots) {
+            if (-not (Test-InstalledTrayProcess -Snapshot $snapshot -ScriptPath $installation.InstalledScriptPath -PowerShellPath $powerShellPath -SessionId $sessionId)) { continue }
+            if (-not (Test-ProcessOwnedByCurrentUser -Snapshot $snapshot)) { continue }
+
+            $children = @($snapshots | Where-Object {
+                (Test-TrayChildCliProcess -Snapshot $_ -Parent $snapshot -CliPaths $cliPaths) -and
+                (Test-ProcessOwnedByCurrentUser -Snapshot $_)
+            })
+            Write-Host "Closing $($installation.ProductName) to install TrayTunnel. Cisco's VPN service stays running."
+            $requested = Send-TrayExitRequest -ApplicationId $installation.AppId
+            Stop-VerifiedProcessSnapshot -Snapshot $snapshot -ExitRequested:$requested
+            # Older trays cannot clean up their hidden listener after termination.
+            foreach ($child in $children) { Stop-VerifiedProcessSnapshot -Snapshot $child }
+        }
+    }
+}
+
 function Exit-AppMutexSet {
     param(
         [AllowNull()]
@@ -2143,17 +2280,29 @@ function Install-App {
     $recognizedStates = @($migrationStates | Where-Object { $_.HasArtifacts -and $_.IdentityRecognized })
     $migrationState = Select-LegacyMigrationSource -States $migrationStates
     $migrationLease = $null
+    $releaseMigrationLease = $false
     $migrationPerformed = $false
     $startupEnabled = $true
     $effectiveDesktopShortcut = [bool]$CreateDesktopShortcut
 
     try {
-        if ($recognizedStates.Count -gt 0) {
+        if ($null -ne $script:MutexLease -and $script:MutexLease.Acquired) {
+            # The tray's Start with Windows action already owns these locks.
+            $migrationLease = $script:MutexLease
+        }
+        else {
+            $releaseMigrationLease = $true
             $migrationLease = Enter-AppMutexSet
             if (-not $migrationLease.Acquired) {
-                throw 'Migration requires all current and previous tray versions to be exited. Choose Exit from the running tray application, then retry the installation.'
+                Stop-RunningInstalledTrays -LegacyStates $migrationStates
+                $migrationLease = Enter-AppMutexSet
             }
+        }
+        if (-not $migrationLease.Acquired) {
+            throw 'A running tray could not be safely closed automatically. Choose Exit from that tray, then retry the installation.'
+        }
 
+        if ($recognizedStates.Count -gt 0) {
             # Re-read only after holding all identity mutexes so an old tray cannot
             # start or mutate its per-user state during the transition.
             $migrationStates = @(Get-LegacyMigrationStates)
@@ -2246,7 +2395,7 @@ function Install-App {
         }
     }
     finally {
-        Exit-AppMutexSet -Lease $migrationLease
+        if ($releaseMigrationLease) { Exit-AppMutexSet -Lease $migrationLease }
     }
 
     Write-Host "Installed $($script:ProductName) $($script:Version) at: $destinationPath"
@@ -2269,6 +2418,7 @@ function Install-App {
         }
     }
 
+    if ($null -ne $script:MutexLease -and $script:MutexLease.Acquired) { return }
     if (Test-AppMutexExists) {
         Write-Warning 'A tray instance is already running. Exit and relaunch it to load this installed version.'
         return
@@ -4075,6 +4225,10 @@ function Stop-TrayApplication {
         Write-AppLog -Message 'Tray application exited. The VPN connection and startup setting were left unchanged.'
     }
     finally {
+        if ($null -ne $script:ExitRequest) {
+            $script:ExitRequest.Dispose()
+            $script:ExitRequest = $null
+        }
         Exit-AppMutexSet -Lease $script:MutexLease
         $script:MutexLease = $null
         $script:ApplicationContext.ExitThread()
@@ -4088,6 +4242,8 @@ function Start-TrayApplication {
     if (-not $script:MutexLease.Acquired) {
         return
     }
+
+    $script:ExitRequest = New-Object Threading.EventWaitHandle($false, [Threading.EventResetMode]::ManualReset, (Get-TrayExitEventName))
 
     $script:Settings = Read-AppSettings
     $script:CompanyNetworkDetected = $false
@@ -4181,6 +4337,10 @@ function Start-TrayApplication {
     $script:PollTimer.Interval = 250
     $script:PollTimer.Add_Tick({
         try {
+            if ($null -ne $script:ExitRequest -and $script:ExitRequest.WaitOne(0)) {
+                Stop-TrayApplication
+                return
+            }
             $now = [DateTime]::UtcNow
             Update-CompanyNetworkStatus -Now $now
             Update-CliNotificationListener -Now $now
